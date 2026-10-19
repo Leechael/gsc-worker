@@ -5,7 +5,14 @@
  * (process.env) and Cloudflare Workers (per-request bindings): entries call
  * setEnvSource(), and getConfig() re-parses when the source object changes.
  */
+import { parseEncryptionKey } from './google-oauth/crypto.js';
+import { isKvNamespace, type KvNamespaceLike } from './google-oauth/store.js';
+
 export const VERSION = '0.1.0';
+
+/** Workers KV binding name for the in-Worker Google authorization store. */
+export const TOKEN_KV_BINDING = 'GSC_TOKENS';
+export const GOOGLE_CALLBACK_PATH = '/auth/google/callback';
 
 export type EntryKind = 'node' | 'worker' | 'stdio';
 export type ScopeTier = 'read' | 'write' | 'destructive';
@@ -40,8 +47,19 @@ export interface GoogleConfig {
   scopes: string[];
 }
 
+/** In-Worker Google authorization (/auth/google/*). */
+export interface GoogleAuthStorageConfig {
+  /** GSC_TOKENS KV namespace binding (Workers only). */
+  kv?: KvNamespaceLike;
+  /** TOKEN_ENCRYPTION_KEY: base64 of 32 random bytes. */
+  encryptionKey?: string;
+  /** GOOGLE_REDIRECT_URI: overrides the redirect URI derived from the request host. */
+  redirectUri?: string;
+}
+
 export interface Config {
   google: GoogleConfig;
+  googleAuth: GoogleAuthStorageConfig;
   scopeTier: ScopeTier;
   /** GSC_DATA_STATE (all|final), default 'all' (matches GSC dashboard). */
   dataState: DataState;
@@ -144,8 +162,17 @@ export function parseConfig(): Config {
   if (clientSecret) google.clientSecret = clientSecret;
   if (refreshToken) google.refreshToken = refreshToken;
 
+  const googleAuth: GoogleAuthStorageConfig = {};
+  const kv = currentSource[TOKEN_KV_BINDING];
+  if (isKvNamespace(kv)) googleAuth.kv = kv;
+  const encryptionKey = env('TOKEN_ENCRYPTION_KEY');
+  if (encryptionKey) googleAuth.encryptionKey = encryptionKey;
+  const redirectUri = env('GOOGLE_REDIRECT_URI');
+  if (redirectUri) googleAuth.redirectUri = redirectUri;
+
   const cfg: Config = {
     google,
+    googleAuth,
     scopeTier,
     dataState,
     allowDestructive,
@@ -242,6 +269,45 @@ export function validateHttpConfig(cfg: Config, entry: 'node' | 'worker'): strin
     errors.push(`Binding to non-loopback MCP_HOST '${cfg.host}' requires MCP_ALLOWED_HOSTS (DNS rebinding protection).`);
   }
 
+  errors.push(...validateGoogleAuthStorage(cfg, entry));
+  return errors;
+}
+
+/** Startup checks for the in-Worker authorization store (fail closed). */
+function validateGoogleAuthStorage(cfg: Config, entry: 'node' | 'worker'): string[] {
+  const errors: string[] = [];
+  const { kv, encryptionKey, redirectUri } = cfg.googleAuth;
+  if (entry !== 'worker') return errors;
+
+  if (kv && !encryptionKey) {
+    errors.push(
+      `KV namespace ${TOKEN_KV_BINDING} is bound but TOKEN_ENCRYPTION_KEY is not set. ` +
+        'Refusing to store or read Google tokens unencrypted. Set it with: openssl rand -base64 32 | npx wrangler secret put TOKEN_ENCRYPTION_KEY',
+    );
+  }
+  if (kv && encryptionKey) {
+    const parsed = parseEncryptionKey(encryptionKey);
+    if (!parsed.ok) errors.push(parsed.error);
+  }
+  if (redirectUri) {
+    let url: URL | null = null;
+    try {
+      url = new URL(redirectUri);
+    } catch {
+      errors.push(`GOOGLE_REDIRECT_URI '${redirectUri}' is not an absolute URL.`);
+    }
+    if (url) {
+      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackHost(url.hostname))) {
+        errors.push(`GOOGLE_REDIRECT_URI must use https (http is only allowed for localhost); got '${redirectUri}'.`);
+      }
+      if (url.pathname !== GOOGLE_CALLBACK_PATH || url.search || url.hash) {
+        errors.push(`GOOGLE_REDIRECT_URI must point at this Worker's ${GOOGLE_CALLBACK_PATH} with no query; got '${redirectUri}'.`);
+      }
+      if (cfg.allowedHosts && !isLoopbackHost(url.hostname) && !cfg.allowedHosts.some((h) => h.toLowerCase() === url.hostname.toLowerCase())) {
+        errors.push(`GOOGLE_REDIRECT_URI host '${url.hostname}' is not in MCP_ALLOWED_HOSTS, so the callback would be rejected.`);
+      }
+    }
+  }
   return errors;
 }
 
@@ -257,6 +323,12 @@ export function validateHttpWarnings(cfg: Config): string[] {
   if (cfg.skipOAuthWarn) {
     warnings.push(
       'GSC_SKIP_OAUTH is set but has no effect in the TypeScript build (no service-account support; plan §6.3).',
+    );
+  }
+  if (cfg.googleAuth?.encryptionKey && !cfg.googleAuth.kv) {
+    warnings.push(
+      `TOKEN_ENCRYPTION_KEY is set but no ${TOKEN_KV_BINDING} KV namespace is bound: in-Worker Google authorization (/auth/google) is disabled ` +
+        'and the key is unused (it is always unused on the Node and stdio entries).',
     );
   }
   return warnings;

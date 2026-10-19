@@ -35,11 +35,19 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         'Also documents the AEO/GEO capability boundary (no AI Overview / AI Mode data via API).',
     },
     async () => {
-      const authStatus = svc.tokenProvider.configured
-        ? svc.tokenProvider.lastErrorMessage
-          ? `⚠️ Credentials configured, but the last token refresh failed:\n${svc.tokenProvider.lastErrorMessage}`
+      const status = await svc.tokenProvider.status();
+      const authStatus = status.configured
+        ? status.error
+          ? `⚠️ Credentials configured, but the last token refresh failed:\n${status.error}`
           : '✅ Credentials configured — ready to use all tools in the current scope tier.'
-        : '❌ Not authenticated — run: npm run auth -- --scopes readonly --client-secrets <下载的json> --out gsc-credentials.json, then set GSC_CREDENTIALS_FILE (本地/Docker) or the三个 GOOGLE_* env / wrangler secrets (Workers)';
+        : '❌ Not authenticated — on Cloudflare Workers with the GSC_TOKENS KV binding, open https://<worker-host>/auth/google in a browser. ' +
+          'Otherwise run: npm run auth -- --scopes readonly --client-secrets <downloaded.json> --out gsc-credentials.json, ' +
+          'then set GSC_CREDENTIALS_FILE (Node/Docker) or the three GOOGLE_* env vars / wrangler secrets.';
+      const tokenSource = {
+        kv: `kv (authorized in-Worker via /auth/google${status.stored ? `, stored ${status.stored.storedAt}` : ''}${status.stored?.email ? `, account ${status.stored.email}` : ''})`,
+        env: 'env (GOOGLE_REFRESH_TOKEN)',
+        none: 'none',
+      }[status.source];
 
       const tier = svc.config.scopeTier;
       const lines: string[] = [
@@ -49,6 +57,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         '',
         'AUTH STATUS:',
         authStatus,
+        `TOKEN SOURCE: ${tokenSource}`,
         '',
         'GETTING STARTED:',
         '1. Fix auth if needed (see AUTH STATUS).',

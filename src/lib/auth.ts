@@ -1,5 +1,10 @@
 import type { GoogleConfig } from './config.js';
-import { CREDENTIALS_MISSING_MESSAGE, REFRESH_TOKEN_INVALID_MESSAGE } from './errors.js';
+import {
+  CREDENTIALS_MISSING_MESSAGE,
+  REFRESH_TOKEN_INVALID_MESSAGE,
+  STORED_REFRESH_TOKEN_INVALID_MESSAGE,
+} from './errors.js';
+import type { GoogleTokenStore, StoredTokenMeta } from './google-oauth/store.js';
 
 /** Refresh-token exchange failed; `cause` distinguishes invalid_grant. */
 export class TokenRefreshError extends Error {
@@ -18,6 +23,26 @@ interface TokenResponse {
   token_type?: string;
 }
 
+/** Where the active refresh token comes from: KV (in-Worker flow) wins over env. */
+export type TokenSource = 'kv' | 'env' | 'none';
+
+export interface TokenStatus {
+  source: TokenSource;
+  /** GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are both set. */
+  clientConfigured: boolean;
+  /** Client credentials plus a refresh token are present (does not guarantee they work). */
+  configured: boolean;
+  /** Metadata of the KV-stored token, when one exists. */
+  stored: StoredTokenMeta | null;
+  /** Last refresh failure, or a KV read/decrypt failure. No secret values. */
+  error: string | null;
+}
+
+export interface TokenProviderOptions {
+  /** Encrypted KV store from the in-Worker authorization flow. */
+  store?: GoogleTokenStore | null;
+}
+
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 /** Renew this long before Google's expiry so concurrent calls never race it. */
 const EXPIRY_MARGIN_SEC = 300;
@@ -25,6 +50,8 @@ const EXPIRY_MARGIN_SEC = 300;
 /**
  * Refreshes and caches Google access tokens.
  *
+ * - Refresh token precedence: KV-stored token (written by /auth/google) if
+ *   present, else GOOGLE_REFRESH_TOKEN from the environment.
  * - In-memory cache with a safety margin (a 1h token is cached for ~55 min).
  * - Concurrent expiry triggers a single token request (in-flight dedup,
  *   plan §7-10); every caller awaits the same promise.
@@ -35,17 +62,20 @@ export class TokenProvider {
   private cached: { accessToken: string; expiresAtMs: number } | null = null;
   private inflight: Promise<string> | null = null;
   private lastError: string | null = null;
+  private readonly store: GoogleTokenStore | null;
 
   constructor(
     private readonly google: GoogleConfig,
     // Never default to bare `fetch`: on workerd it must be called with its
     // owner as `this` ("Illegal invocation" otherwise).
     private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
-  ) {}
+    options: TokenProviderOptions = {},
+  ) {
+    this.store = options.store ?? null;
+  }
 
-  /** All three credential parts present (does not guarantee the token works). */
-  get configured(): boolean {
-    return Boolean(this.google.clientId && this.google.clientSecret && this.google.refreshToken);
+  private get clientConfigured(): boolean {
+    return Boolean(this.google.clientId && this.google.clientSecret);
   }
 
   /** Human-readable error from the last failed refresh, if any. */
@@ -53,10 +83,36 @@ export class TokenProvider {
     return this.lastError;
   }
 
-  async getAccessToken(): Promise<string> {
-    if (!this.configured) {
-      throw new TokenRefreshError(CREDENTIALS_MISSING_MESSAGE);
+  /** Drop the cached access token and last error (after a new token is stored or revoked). */
+  reset(): void {
+    this.cached = null;
+    this.lastError = null;
+  }
+
+  /** Active token source and health, without secret values. */
+  async status(): Promise<TokenStatus> {
+    let stored: StoredTokenMeta | null = null;
+    let storeError: string | null = null;
+    if (this.store) {
+      try {
+        stored = await this.store.loadMeta();
+      } catch (e) {
+        storeError = e instanceof Error ? e.message : String(e);
+      }
     }
+    // An unreadable KV record still counts as the KV source: falling back to
+    // env would silently use a different account than the one authorized.
+    const source: TokenSource = stored || storeError ? 'kv' : this.google.refreshToken ? 'env' : 'none';
+    return {
+      source,
+      clientConfigured: this.clientConfigured,
+      configured: this.clientConfigured && source !== 'none',
+      stored,
+      error: storeError ?? this.lastError,
+    };
+  }
+
+  async getAccessToken(): Promise<string> {
     if (this.cached && this.cached.expiresAtMs > Date.now()) {
       return this.cached.accessToken;
     }
@@ -78,11 +134,31 @@ export class TokenProvider {
     }
   }
 
+  private async resolveRefreshToken(): Promise<{ source: 'kv' | 'env'; token: string } | null> {
+    if (this.store) {
+      let stored: Awaited<ReturnType<GoogleTokenStore['loadRefreshToken']>>;
+      try {
+        stored = await this.store.loadRefreshToken();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.lastError = msg;
+        throw new TokenRefreshError(msg);
+      }
+      if (stored) return { source: 'kv', token: stored.refreshToken };
+    }
+    if (this.google.refreshToken) return { source: 'env', token: this.google.refreshToken };
+    return null;
+  }
+
   private async refresh(): Promise<string> {
+    const resolved = await this.resolveRefreshToken();
+    if (!this.clientConfigured || !resolved) {
+      throw new TokenRefreshError(CREDENTIALS_MISSING_MESSAGE);
+    }
     const body = new URLSearchParams({
       client_id: this.google.clientId!,
       client_secret: this.google.clientSecret!,
-      refresh_token: this.google.refreshToken!,
+      refresh_token: resolved.token,
       grant_type: 'refresh_token',
     });
 
@@ -105,7 +181,9 @@ export class TokenProvider {
       const errCode = data?.error ?? `HTTP ${res.status}`;
       const invalidGrant = errCode === 'invalid_grant';
       const msg = invalidGrant
-        ? REFRESH_TOKEN_INVALID_MESSAGE
+        ? resolved.source === 'kv'
+          ? STORED_REFRESH_TOKEN_INVALID_MESSAGE
+          : REFRESH_TOKEN_INVALID_MESSAGE
         : `Google token refresh failed (${errCode}): ${data?.error_description ?? 'no details'}`;
       this.lastError = msg;
       throw new TokenRefreshError(msg, invalidGrant);
