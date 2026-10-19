@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
-import { errorText, formatDateTime, jsonResult, textResult } from './helpers.js';
+import { errorText, errorResult, formatDateTime, jsonError, jsonResult, textResult } from './helpers.js';
 
 /** API response shapes for POST /v1/urlInspection/index:inspect. */
 interface IndexStatusResult {
@@ -14,6 +14,8 @@ interface IndexStatusResult {
   googleCanonical?: string;
   userCanonical?: string;
   crawledAs?: string;
+  /** Sitemaps that contain this URL. The API field name is `sitemap`. */
+  sitemap?: string[];
   referringUrls?: string[];
 }
 
@@ -147,6 +149,7 @@ async function inspectSingleUrl(
       index_verdict: indexStatus.verdict ?? 'UNKNOWN',
       coverage_state: indexStatus.coverageState ?? 'Unknown',
       last_crawled: lastCrawl,
+      referring_sitemaps: indexStatus.sitemap ?? [],
       rich_results: richResultsSummary(inspection),
     };
   } catch (e) {
@@ -162,12 +165,18 @@ interface IndexingClassification {
   indexed: string | null;
 }
 
-/** One classification; never throws — failures land in `not_indexed`. */
+interface IndexingCheck {
+  classification: IndexingClassification | null;
+  /** Set when the inspection request itself failed. Not an indexing state. */
+  error: string | null;
+}
+
+/** One classification; never throws. Request failures stay out of the buckets. */
 async function checkIndexingSingleUrl(
   svc: ServerServices,
   siteUrl: string,
   pageUrl: string,
-): Promise<IndexingClassification> {
+): Promise<IndexingCheck> {
   const result: IndexingClassification = {
     not_indexed: null,
     canonical_issues: null,
@@ -180,7 +189,7 @@ async function checkIndexingSingleUrl(
     const inspection = response.inspectionResult;
     if (!inspection) {
       result.not_indexed = `${pageUrl} - No inspection data found`;
-      return result;
+      return { classification: result, error: null };
     }
 
     const indexStatus = inspection.indexStatusResult ?? {};
@@ -207,10 +216,11 @@ async function checkIndexingSingleUrl(
     if (fetchState !== 'SUCCESSFUL') {
       result.fetch_issues = `${pageUrl} - ${fetchState}`;
     }
+    return { classification: result, error: null };
   } catch (e) {
-    result.not_indexed = `${pageUrl} - Error: ${e instanceof Error ? e.message : String(e)}`;
+    const message = e instanceof Error ? e.message : String(e);
+    return { classification: null, error: `${pageUrl} - Error: ${message}` };
   }
-  return result;
 }
 
 export function registerInspectionTools(server: McpServer, svc: ServerServices): void {
@@ -255,6 +265,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           google_canonical: indexStatus.googleCanonical ?? null,
           user_canonical: indexStatus.userCanonical ?? null,
           crawled_as: indexStatus.crawledAs ?? null,
+          referring_sitemaps: indexStatus.sitemap ?? [],
           referring_urls: (indexStatus.referringUrls ?? []).slice(0, 5),
           rich_results: richResultsSummary(inspection),
         };
@@ -265,7 +276,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
 
         return jsonResult(output);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('inspecting URL', e, site_url) }] };
+        return errorResult(errorText('inspecting URL', e, site_url));
       }
     },
   );
@@ -287,21 +298,25 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url, urls }) => {
       const urlList = parseUrls(urls);
-      if (urlList.length === 0) return textResult('No URLs provided for inspection.');
-      if (urlList.length > 10) return textResult(TOO_MANY_URLS(urlList.length));
+      if (urlList.length === 0) return errorResult('No URLs provided for inspection.');
+      if (urlList.length > 10) return errorResult(TOO_MANY_URLS(urlList.length));
 
       try {
         const results = await runWithConcurrency(urlList, 5, (pageUrl) =>
           inspectSingleUrl(svc, site_url, pageUrl),
         );
-        return jsonResult({
+        const payload = {
           site_url,
           count: results.length,
           results,
           quota_note: QUOTA_NOTE,
-        });
+        };
+        // Per-row errors are data when the batch is mixed. A batch where every
+        // URL failed is an API failure and must set isError.
+        if (results.every((row) => 'error' in row)) return jsonError(payload);
+        return jsonResult(payload);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('performing batch inspection', e, site_url) }] };
+        return errorResult(errorText('performing batch inspection', e, site_url));
       }
     },
   );
@@ -323,8 +338,8 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url, urls }) => {
       const urlList = parseUrls(urls);
-      if (urlList.length === 0) return textResult('No URLs provided for inspection.');
-      if (urlList.length > 10) return textResult(TOO_MANY_URLS(urlList.length));
+      if (urlList.length === 0) return errorResult('No URLs provided for inspection.');
+      if (urlList.length > 10) return errorResult(TOO_MANY_URLS(urlList.length));
 
       try {
         const perUrl = await runWithConcurrency(urlList, 5, (pageUrl) =>
@@ -338,11 +353,26 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           fetch_issues: [],
           indexed: [],
         };
+        const requestFailures: string[] = [];
         for (const entry of perUrl) {
+          if (entry.error !== null) {
+            requestFailures.push(entry.error);
+            continue;
+          }
+          const classification = entry.classification;
+          if (classification === null) continue;
           for (const category of Object.keys(issuesSummary) as (keyof IndexingClassification)[]) {
-            const value = entry[category];
+            const value = classification[category];
             if (value !== null) issuesSummary[category].push(value);
           }
+        }
+
+        if (requestFailures.length === urlList.length) {
+          return jsonError({
+            error: 'Indexing check failed for every URL.',
+            site_url,
+            request_failures: requestFailures,
+          });
         }
 
         return jsonResult({
@@ -354,7 +384,9 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
             canonical_issues: issuesSummary.canonical_issues.length,
             robots_blocked: issuesSummary.robots_blocked.length,
             fetch_issues: issuesSummary.fetch_issues.length,
+            request_failures: requestFailures.length,
           },
+          request_failures: requestFailures,
           issues: {
             not_indexed: issuesSummary.not_indexed,
             canonical_issues: issuesSummary.canonical_issues,
@@ -365,7 +397,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           quota_note: QUOTA_NOTE,
         });
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('checking indexing issues', e, site_url) }] };
+        return errorResult(errorText('checking indexing issues', e, site_url));
       }
     },
   );

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { DIMENSIONS, type Dimension } from '../lib/enums.js';
 import { lastNDays } from '../lib/dates.js';
-import { errorText, jsonResult } from './helpers.js';
+import { errorText, errorResult, jsonError, jsonResult } from './helpers.js';
 
 /** Python版 semantics, kept for M1; §9.2-4 决策后可能调整 (see plan). */
 const ROW_LIMIT_MAX = 500;
@@ -69,18 +69,18 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
           .filter(Boolean) as Dimension[];
         const invalid = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
         if (invalid.length > 0) {
-          return jsonResult({
+          return jsonError({
             error: `Invalid dimensions: ${invalid.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}`,
           });
         }
         if (dimensionList.length === 0) {
-          return jsonResult({ error: 'At least one dimension is required.' });
+          return jsonError({ error: 'At least one dimension is required.' });
         }
         // The hour dimension requires dataState=hourly_all and a ≤10-day range;
         // this tool only sends all/final, so reject it here instead of letting
         // an invalid request reach the API (review P2-5).
         if (dimensionList.includes('hour')) {
-          return jsonResult({
+          return jsonError({
             error: 'The "hour" dimension is only supported by get_advanced_search_analytics with ' +
               'data_state="hourly_all" and a date range of at most 10 days.',
           });
@@ -135,7 +135,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
           }),
         });
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving search analytics', e, site_url) }] };
+        return errorResult(errorText('retrieving search analytics', e, site_url));
       }
     },
   );

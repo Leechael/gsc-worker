@@ -26,7 +26,7 @@ interface GoogleErrorBody {
 
 export interface GscRequestOptions {
   method?: 'GET' | 'POST' | 'DELETE' | 'PUT';
-  query?: Record<string, string | undefined>;
+  query?: Record<string, string | null | undefined>;
   body?: unknown;
 }
 
@@ -57,7 +57,8 @@ export class GscClient {
     const { method = 'GET', query, body } = options;
     const url = new URL(`${GSC_BASE_URL}${path}`);
     for (const [k, v] of Object.entries(query ?? {})) {
-      if (v !== undefined) url.searchParams.set(k, v);
+      // null means the argument was omitted.
+      if (v != null) url.searchParams.set(k, v);
     }
 
     const accessToken = await this.opts.tokenProvider.getAccessToken();

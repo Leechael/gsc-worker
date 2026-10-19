@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
-import { errorText, jsonResult, textResult, tierGateMessage, formatDateTime } from './helpers.js';
+import { errorText, errorResult, textResult, tierGateMessage, formatDateTime } from './helpers.js';
 
 interface SitemapContent {
   type?: string;
@@ -33,12 +33,12 @@ function sitemapsPath(siteUrl: string, feedpath?: string): string {
 }
 
 /** Port of Python get_sitemaps (gsc_server.py). */
-async function getSitemaps(svc: ServerServices, siteUrl: string): Promise<string> {
+async function getSitemaps(svc: ServerServices, siteUrl: string) {
   try {
     const data = await svc.gsc.request<SitemapListResponse>(sitemapsPath(siteUrl));
 
     if (!data.sitemap || data.sitemap.length === 0) {
-      return `No sitemaps found for ${siteUrl}.`;
+      return textResult(`No sitemaps found for ${siteUrl}.`);
     }
 
     const sitemapList = data.sitemap.map((sitemap) => {
@@ -76,13 +76,13 @@ async function getSitemaps(svc: ServerServices, siteUrl: string): Promise<string
       };
     });
 
-    return JSON.stringify({
+    return textResult(JSON.stringify({
       site_url: siteUrl,
       count: sitemapList.length,
       sitemaps: sitemapList,
-    });
+    }));
   } catch (e) {
-    return errorText('retrieving sitemaps', e, siteUrl);
+    return errorResult(errorText('retrieving sitemaps', e, siteUrl));
   }
 }
 
@@ -90,16 +90,16 @@ async function getSitemaps(svc: ServerServices, siteUrl: string): Promise<string
 async function listSitemapsEnhanced(
   svc: ServerServices,
   siteUrl: string,
-  sitemapIndex?: string,
-): Promise<string> {
+  sitemapIndex?: string | null,
+) {
   try {
     const data = await svc.gsc.request<SitemapListResponse>(sitemapsPath(siteUrl), {
       query: { sitemapIndex },
     });
 
     if (!data.sitemap || data.sitemap.length === 0) {
-      return (
-        `No sitemaps found for ${siteUrl}` + (sitemapIndex ? ` in index ${sitemapIndex}` : '.')
+      return textResult(
+        `No sitemaps found for ${siteUrl}` + (sitemapIndex ? ` in index ${sitemapIndex}` : '.'),
       );
     }
 
@@ -127,15 +127,15 @@ async function listSitemapsEnhanced(
 
     const pendingCount = sitemapList.filter((s) => s.is_pending).length;
 
-    return JSON.stringify({
+    return textResult(JSON.stringify({
       site_url: siteUrl,
       sitemap_index: sitemapIndex ?? null,
       count: sitemapList.length,
       pending_count: pendingCount,
       sitemaps: sitemapList,
-    });
+    }));
   } catch (e) {
-    return errorText('retrieving sitemaps', e, siteUrl);
+    return errorResult(errorText('retrieving sitemaps', e, siteUrl));
   }
 }
 
@@ -144,12 +144,12 @@ async function getSitemapDetails(
   svc: ServerServices,
   siteUrl: string,
   sitemapUrl: string,
-): Promise<string> {
+) {
   try {
     const details = await svc.gsc.request<SitemapDetails>(sitemapsPath(siteUrl, sitemapUrl));
 
     if (!details) {
-      return `No details found for sitemap ${sitemapUrl}.`;
+      return textResult(`No details found for sitemap ${sitemapUrl}.`);
     }
 
     const isIndex = details.isSitemapsIndex ?? false;
@@ -161,7 +161,7 @@ async function getSitemapDetails(
       indexed_deprecated: content.indexed ?? null,
     }));
 
-    return JSON.stringify({
+    return textResult(JSON.stringify({
       sitemap_url: sitemapUrl,
       site_url: siteUrl,
       type: isIndex ? 'Index' : 'Sitemap',
@@ -172,9 +172,9 @@ async function getSitemapDetails(
       warnings: Number(details.warnings ?? 0),
       content_breakdown: contentBreakdown,
       is_index: isIndex,
-    });
+    }));
   } catch (e) {
-    return errorText('retrieving sitemap details', e);
+    return errorResult(errorText('retrieving sitemap details', e));
   }
 }
 
@@ -183,9 +183,9 @@ async function submitSitemap(
   svc: ServerServices,
   siteUrl: string,
   sitemapUrl: string,
-): Promise<string> {
+) {
   const gate = tierGateMessage(svc.config.scopeTier, 'submit_sitemap', 'write');
-  if (gate) return gate;
+  if (gate) return errorResult(gate);
   try {
     await svc.gsc.request(sitemapsPath(siteUrl, sitemapUrl), { method: 'PUT' });
 
@@ -206,13 +206,13 @@ async function submitSitemap(
         '\nNote: Google may take some time to process the sitemap. Check back later for full details.',
       );
 
-      return resultLines.join('\n');
+      return textResult(resultLines.join('\n'));
     } catch {
       // If we can't get details, just return basic success message
-      return `Successfully submitted sitemap: ${sitemapUrl}\n\nGoogle will queue it for processing.`;
+      return textResult(`Successfully submitted sitemap: ${sitemapUrl}\n\nGoogle will queue it for processing.`);
     }
   } catch (e) {
-    return errorText('submitting sitemap', e);
+    return errorResult(errorText('submitting sitemap', e));
   }
 }
 
@@ -221,28 +221,28 @@ async function deleteSitemap(
   svc: ServerServices,
   siteUrl: string,
   sitemapUrl: string,
-): Promise<string> {
+) {
   const gate = tierGateMessage(svc.config.scopeTier, 'delete_sitemap', 'destructive');
-  if (gate) return gate;
+  if (gate) return errorResult(gate);
   try {
     // First check if the sitemap exists
     try {
       await svc.gsc.request<SitemapDetails>(sitemapsPath(siteUrl, sitemapUrl));
     } catch (e) {
       if (e instanceof GscApiError && e.status === 404) {
-        return `Sitemap not found: ${sitemapUrl}. It may have already been deleted or was never submitted.`;
+        return errorResult(`Sitemap not found: ${sitemapUrl}. It may have already been deleted or was never submitted.`);
       }
       throw e;
     }
 
     await svc.gsc.request(sitemapsPath(siteUrl, sitemapUrl), { method: 'DELETE' });
 
-    return (
+    return textResult(
       `Successfully deleted sitemap: ${sitemapUrl}\n\n` +
-      'Note: This only removes the sitemap from Search Console. Any URLs already indexed will remain in Google\'s index.'
+      'Note: This only removes the sitemap from Search Console. Any URLs already indexed will remain in Google\'s index.',
     );
   } catch (e) {
-    return errorText('deleting sitemap', e);
+    return errorResult(errorText('deleting sitemap', e));
   }
 }
 
@@ -261,7 +261,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
         site_url: z.string().describe(SITE_URL_DESCRIPTION),
       }),
     },
-    async ({ site_url }) => textResult(await getSitemaps(svc, site_url)),
+    async ({ site_url }) => getSitemaps(svc, site_url),
   );
 
   server.registerTool(
@@ -272,13 +272,13 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
         'List all sitemaps for a specific Search Console property with detailed information.',
       inputSchema: z.object({
         site_url: z.string().describe(SITE_URL_DESCRIPTION),
-        sitemap_index: z.string().optional().describe(
-          'Optional sitemap index URL to list child sitemaps.',
+        sitemap_index: z.string().nullish().describe(
+          'Optional sitemap index URL to list child sitemaps. Explicit null means omitted.',
         ),
       }),
     },
     async ({ site_url, sitemap_index }) =>
-      textResult(await listSitemapsEnhanced(svc, site_url, sitemap_index)),
+      listSitemapsEnhanced(svc, site_url, sitemap_index),
   );
 
   server.registerTool(
@@ -292,7 +292,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
       }),
     },
     async ({ site_url, sitemap_url }) =>
-      textResult(await getSitemapDetails(svc, site_url, sitemap_url)),
+      getSitemapDetails(svc, site_url, sitemap_url),
   );
 
   server.registerTool(
@@ -306,7 +306,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
       }),
     },
     async ({ site_url, sitemap_url }) =>
-      textResult(await submitSitemap(svc, site_url, sitemap_url)),
+      submitSitemap(svc, site_url, sitemap_url),
   );
 
   server.registerTool(
@@ -320,7 +320,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
       }),
     },
     async ({ site_url, sitemap_url }) =>
-      textResult(await deleteSitemap(svc, site_url, sitemap_url)),
+      deleteSitemap(svc, site_url, sitemap_url),
   );
 
   server.registerTool(
@@ -331,11 +331,11 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
       inputSchema: z.object({
         site_url: z.string().describe(SITE_URL_DESCRIPTION),
         action: z.string().describe('The action to perform (list, details, submit, delete).'),
-        sitemap_url: z.string().optional().describe(
-          'The full URL of the sitemap (required for details, submit, delete).',
+        sitemap_url: z.string().nullish().describe(
+          'The full URL of the sitemap (required for details, submit, delete). Explicit null means omitted.',
         ),
-        sitemap_index: z.string().optional().describe(
-          'Optional sitemap index URL for listing child sitemaps (only used with \'list\' action).',
+        sitemap_index: z.string().nullish().describe(
+          'Optional sitemap index URL for listing child sitemaps (only used with \'list\' action). Explicit null means omitted.',
         ),
       }),
     },
@@ -345,27 +345,27 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
         const validActions = ['list', 'details', 'submit', 'delete'];
 
         if (!validActions.includes(normalized)) {
-          return textResult(
+          return errorResult(
             `Invalid action: ${action}. Please use one of: ${validActions.join(', ')}`,
           );
         }
 
         if ((normalized === 'details' || normalized === 'submit' || normalized === 'delete') && !sitemap_url) {
-          return textResult(`The ${normalized} action requires a sitemap_url parameter.`);
+          return errorResult(`The ${normalized} action requires a sitemap_url parameter.`);
         }
 
         switch (normalized) {
           case 'list':
-            return textResult(await listSitemapsEnhanced(svc, site_url, sitemap_index));
+            return listSitemapsEnhanced(svc, site_url, sitemap_index);
           case 'details':
-            return textResult(await getSitemapDetails(svc, site_url, sitemap_url as string));
+            return getSitemapDetails(svc, site_url, sitemap_url as string);
           case 'submit':
-            return textResult(await submitSitemap(svc, site_url, sitemap_url as string));
+            return submitSitemap(svc, site_url, sitemap_url as string);
           case 'delete':
-            return textResult(await deleteSitemap(svc, site_url, sitemap_url as string));
+            return deleteSitemap(svc, site_url, sitemap_url as string);
         }
       } catch (e) {
-        return textResult(`Error managing sitemaps: ${e instanceof Error ? e.message : String(e)}`);
+        return errorResult(`Error managing sitemaps: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   );

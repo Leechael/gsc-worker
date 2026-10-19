@@ -2,13 +2,28 @@ import { GscApiError, TokenRefreshError } from '../lib/gsc-client.js';
 import { siteNotFoundError } from '../lib/errors.js';
 import type { ScopeTier } from '../lib/config.js';
 
-/** Standard text content wrapper for MCP tool results. */
+/** Successful text content. Empty datasets use this too — they are not failures. */
 export function textResult(text: string): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text', text }] };
 }
 
+/**
+ * Failure result. The message is unchanged; `isError` is set so a client can
+ * tell a fault from data. Raising would let the SDK prefix the text with
+ * "Error executing tool …".
+ */
+export function errorResult(text: string): { isError: true; content: { type: 'text'; text: string }[] } {
+  return { isError: true, content: [{ type: 'text', text }] };
+}
+
 export function jsonResult(value: unknown): { content: { type: 'text'; text: string }[] } {
-  return textResult(JSON.stringify(value, null, 2));
+  return textResult(JSON.stringify(value ?? null, null, 2));
+}
+
+/** JSON payload that describes a failed call (validation, refusal, API error). */
+export function jsonError(value: unknown): { isError: true; content: { type: 'text'; text: string }[] } {
+  // JSON.stringify(undefined) is undefined, which is not a valid MCP text block.
+  return errorResult(JSON.stringify(value ?? null, null, 2));
 }
 
 /**
