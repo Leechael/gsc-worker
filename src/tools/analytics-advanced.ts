@@ -11,7 +11,7 @@ import {
   type Dimension,
 } from '../lib/enums.js';
 import { isValidISODate, lastNDays } from '../lib/dates.js';
-import { errorText, jsonResult, textResult } from './helpers.js';
+import { errorText, errorResult, jsonError, jsonResult, textResult } from './helpers.js';
 
 /**
  * Advanced analytics tools, ported from the Python版 gsc_server.py
@@ -126,6 +126,18 @@ function sortRows(rows: Record<string, unknown>[], sortBy: SortMetric, sortDirec
   });
 }
 
+/**
+ * The API has no orderBy and always ranks by clicks descending (#54). A
+ * different sort only reorders the rows already returned, so say so.
+ */
+function sortLimitationNote(sortBy: SortMetric, sortDirection: string): string | null {
+  if (sortBy === 'clicks' && sortDirection.toLowerCase() !== 'ascending') return null;
+  return (
+    'Sorted client-side within the rows Google returned. The Search Analytics API has no orderBy ' +
+    'field and always ranks by clicks descending, so this is not a global sort — rows outside this window are omitted.'
+  );
+}
+
 async function querySearchAnalytics(
   svc: ServerServices,
   siteUrl: string,
@@ -202,7 +214,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         if (metadata) result.metadata = metadata;
         return jsonResult(result);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving performance overview', e, site_url) }] };
+        return errorResult(errorText('retrieving performance overview', e, site_url));
       }
     },
   );
@@ -219,9 +231,11 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
         ),
-        start_date: z.string().optional()
+        // `.nullish()` so an explicit JSON null is "not given" (upstream #58).
+        // `.optional()` advertises a string and rejects null before the tool runs.
+        start_date: z.string().nullish()
           .describe('Start date in YYYY-MM-DD format (defaults to 28 days ago, Pacific Time).'),
-        end_date: z.string().optional()
+        end_date: z.string().nullish()
           .describe('End date in YYYY-MM-DD format (defaults to today, Pacific Time).'),
         dimensions: z.string().default('query')
           .describe('Dimensions to group by, comma-separated (e.g., "query,page,device").'),
@@ -231,7 +245,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         row_limit: z.number().int().min(1).max(API_PAGE_MAX).default(1000).describe(
           `Rows per API page (default 1000, max ${API_PAGE_MAX} per request).`,
         ),
-        max_rows: z.number().int().min(1).max(100000).optional().describe(
+        max_rows: z.number().int().min(1).max(100000).nullish().describe(
           'Total row budget across all automatically-fetched pages (default: same as row_limit, i.e. ' +
           'single-page behavior). Set higher than row_limit to page through more data; each API page ' +
           `still carries at most ${API_PAGE_MAX} rows.`,
@@ -244,15 +258,15 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         sort_direction: z.enum(['ascending', 'descending']).default('descending').describe(
           'Sort direction. For position, ascending puts the best (lowest) average position first.',
         ),
-        filter_dimension: z.string().optional()
+        filter_dimension: z.string().nullish()
           .describe('Single filter dimension. Use "filters" instead for multiple filters.'),
         filter_operator: z.string().default('contains').describe('Single filter operator.'),
-        filter_expression: z.string().optional().describe('Single filter expression value.'),
-        filters: z.string().optional().describe(
+        filter_expression: z.string().nullish().describe('Single filter expression value.'),
+        filters: z.string().nullish().describe(
           'JSON array of filter objects with dimension/operator/expression keys, ANDed together. ' +
           'Overrides filter_dimension/filter_operator/filter_expression when provided.',
         ),
-        data_state: z.string().optional().describe(
+        data_state: z.string().nullish().describe(
           'Data freshness: "all" (default, matches GSC dashboard), "final" (confirmed data only, 2-3 day lag), ' +
           'or "hourly_all" (required when grouping by the hour dimension).',
         ),
@@ -281,20 +295,20 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const start = start_date ?? fallback.start;
         const end = end_date ?? fallback.end;
         if (!isValidISODate(start) || !isValidISODate(end)) {
-          return jsonResult({ error: `Invalid date range: start_date="${start}", end_date="${end}". Expected YYYY-MM-DD.` });
+          return jsonError({ error: `Invalid date range: start_date="${start}", end_date="${end}". Expected YYYY-MM-DD.` });
         }
         if (start > end) {
-          return jsonResult({ error: `Invalid date range: start_date (${start}) is after end_date (${end}).` });
+          return jsonError({ error: `Invalid date range: start_date (${start}) is after end_date (${end}).` });
         }
 
         // Dimensions
         const dimensionList = dimensions.split(',').map((d) => d.trim()).filter(Boolean) as Dimension[];
         const invalidDims = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
         if (invalidDims.length > 0) {
-          return jsonResult({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
+          return jsonError({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
         }
         if (dimensionList.length === 0) {
-          return jsonResult({ error: 'At least one dimension is required.' });
+          return jsonError({ error: 'At least one dimension is required.' });
         }
 
         // search_type (compat param name) → wire field `type`. Match
@@ -304,13 +318,13 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const loweredType = search_type.toLowerCase().trim();
         const resolvedType = SEARCH_TYPES.find((t) => t.toLowerCase() === loweredType);
         if (resolvedType === undefined) {
-          return jsonResult({ error: `Invalid search_type '${search_type}'. Allowed: ${SEARCH_TYPES.join(', ')}` });
+          return jsonError({ error: `Invalid search_type '${search_type}'. Allowed: ${SEARCH_TYPES.join(', ')}` });
         }
 
         // data_state: per-call override (all/final/hourly_all) or fall back to the global setting.
         const resolvedDataState = (data_state ?? svc.config.dataState).toLowerCase().trim();
         if (!['all', 'final', 'hourly_all'].includes(resolvedDataState)) {
-          return jsonResult({
+          return jsonError({
             error: `Invalid data_state value '${data_state}'. Accepted values are 'all' (matches GSC dashboard), ` +
               "'final' (confirmed data only, 2-3 day lag), or 'hourly_all' (required for the hour dimension).",
           });
@@ -320,19 +334,19 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         // ≤10-day window (review P2-5).
         if (dimensionList.includes('hour')) {
           if (resolvedDataState !== 'hourly_all') {
-            return jsonResult({
+            return jsonError({
               error: 'When grouping by the "hour" dimension, data_state must be "hourly_all" ' +
                 `(hourly data is only available before Google aggregates it). Got "${resolvedDataState}".`,
             });
           }
           if (inclusiveDays(start, end) > HOUR_MAX_DAYS) {
-            return jsonResult({
+            return jsonError({
               error: `The "hour" dimension supports a date range of at most ${HOUR_MAX_DAYS} days. ` +
                 `${start} to ${end} spans ${inclusiveDays(start, end)} days.`,
             });
           }
         } else if (resolvedDataState === 'hourly_all') {
-          return jsonResult({
+          return jsonError({
             error: 'data_state "hourly_all" is only valid when grouping by the "hour" dimension.',
           });
         }
@@ -340,24 +354,25 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         // Filters: multi-filter JSON array takes priority over the single-filter triple.
         let activeFilters: ActiveFilter[] = [];
         let filterGroups: { groupType: string; filters: ActiveFilter[] }[] | undefined;
-        if (filters !== undefined && filters.trim() !== '') {
+        // null is omitted (upstream #58); only a non-empty string is a filter.
+        if (filters != null && filters.trim() !== '') {
           let parsed: unknown;
           try {
             parsed = JSON.parse(filters);
           } catch {
-            return jsonResult({ error: 'Invalid filters JSON. Please provide a valid JSON array of filter objects.' });
+            return jsonError({ error: 'Invalid filters JSON. Please provide a valid JSON array of filter objects.' });
           }
           const validated = validateFilterList(parsed);
-          if (!validated.ok) return jsonResult({ error: validated.error });
+          if (!validated.ok) return jsonError({ error: validated.error });
           activeFilters = validated.filters;
           filterGroups = [{ groupType: 'AND', filters: activeFilters }];
-        } else if (filter_dimension !== undefined && filter_expression !== undefined) {
+        } else if (filter_dimension != null && filter_expression != null) {
           const validated = validateFilterList([{
             dimension: filter_dimension,
             operator: filter_operator,
             expression: filter_expression,
           }]);
-          if (!validated.ok) return jsonResult({ error: validated.error });
+          if (!validated.ok) return jsonError({ error: validated.error });
           activeFilters = validated.filters;
           filterGroups = [{ groupType: 'AND', filters: activeFilters }];
         }
@@ -413,6 +428,8 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
             rows: [],
             note: `No search analytics data found for ${site_url} with the specified parameters.`,
           };
+          const sortNote = sortLimitationNote(sort_by, sort_direction);
+          if (sortNote) noData.sort_note = sortNote;
           const metadata = buildMetadata(lastMetadata);
           if (metadata) noData.metadata = metadata;
           return jsonResult(noData);
@@ -433,16 +450,18 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
             has_more: hasMore,
             next_start_row: hasMore ? start_row + mapped.length : null,
             pages_fetched: pagesFetched,
-            ...(max_rows !== undefined ? { max_rows } : {}),
+            ...(max_rows != null ? { max_rows } : {}),
           },
           rows: mapped,
           note: PAGINATION_NOTE,
         };
+        const sortNote = sortLimitationNote(sort_by, sort_direction);
+        if (sortNote) result.sort_note = sortNote;
         const metadata = buildMetadata(lastMetadata);
         if (metadata) result.metadata = metadata;
         return jsonResult(result);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving advanced search analytics', e, site_url) }] };
+        return errorResult(errorText('retrieving advanced search analytics', e, site_url));
       }
     },
   );
@@ -477,25 +496,25 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           ['period2_end', period2_end],
         ] as const) {
           if (!isValidISODate(d)) {
-            return jsonResult({ error: `Invalid ${label} "${d}". Expected YYYY-MM-DD.` });
+            return jsonError({ error: `Invalid ${label} "${d}". Expected YYYY-MM-DD.` });
           }
         }
         if (period1_start > period1_end || period2_start > period2_end) {
-          return jsonResult({ error: 'Invalid period range: start date is after end date.' });
+          return jsonError({ error: 'Invalid period range: start date is after end date.' });
         }
 
         const dimensionList = dimensions.split(',').map((d) => d.trim()).filter(Boolean) as Dimension[];
         const invalidDims = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
         if (invalidDims.length > 0) {
-          return jsonResult({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
+          return jsonError({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
         }
         if (dimensionList.length === 0) {
-          return jsonResult({ error: 'At least one dimension is required.' });
+          return jsonError({ error: 'At least one dimension is required.' });
         }
         // This tool only queries with the global all/final dataState; the hour
         // dimension would be an invalid request (review P2-5).
         if (dimensionList.includes('hour')) {
-          return jsonResult({
+          return jsonError({
             error: 'The "hour" dimension is only supported by get_advanced_search_analytics with ' +
               'data_state="hourly_all" and a date range of at most 10 days.',
           });
@@ -600,7 +619,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         if (meta2) result.metadata_period2 = meta2;
         return jsonResult(result);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('comparing search periods', e, site_url) }] };
+        return errorResult(errorText('comparing search periods', e, site_url));
       }
     },
   );
@@ -667,7 +686,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         if (metadata) result.metadata = metadata;
         return jsonResult(result);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving page query data', e, site_url) }] };
+        return errorResult(errorText('retrieving page query data', e, site_url));
       }
     },
   );

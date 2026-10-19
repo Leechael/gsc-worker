@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
-import { errorText, jsonResult, textResult, tierGateMessage } from './helpers.js';
+import { errorText, errorResult, jsonResult, textResult, tierGateMessage } from './helpers.js';
 
 interface SiteListResponse {
   siteEntry?: { siteUrl?: string; permissionLevel?: string }[];
@@ -92,7 +92,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
           })),
         });
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving properties', e) }] };
+        return errorResult(errorText('retrieving properties', e));
       }
     },
   );
@@ -113,7 +113,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url }) => {
       const gate = tierGateMessage(svc.config.scopeTier, 'add_site', 'destructive');
-      if (gate !== null) return textResult(gate);
+      if (gate !== null) return errorResult(gate);
       try {
         // sites.add is a PUT and returns an empty body on success (review P1-3).
         await svc.gsc.request<void>(
@@ -122,7 +122,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
         );
         return textResult(`Site ${site_url} has been added to Search Console.`);
       } catch (e) {
-        return textResult(siteMutationError(e, 'adding', site_url));
+        return errorResult(siteMutationError(e, 'adding', site_url));
       }
     },
   );
@@ -143,14 +143,14 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url }) => {
       const gate = tierGateMessage(svc.config.scopeTier, 'delete_site', 'destructive');
-      if (gate !== null) return textResult(gate);
+      if (gate !== null) return errorResult(gate);
       try {
         await svc.gsc.request<unknown>(`/webmasters/v3/sites/${encodeURIComponent(site_url)}`, {
           method: 'DELETE',
         });
         return textResult(`Site ${site_url} has been removed from Search Console.`);
       } catch (e) {
-        return textResult(siteMutationError(e, 'removing', site_url));
+        return errorResult(siteMutationError(e, 'removing', site_url));
       }
     },
   );
@@ -194,7 +194,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
         }
         return jsonResult(result);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('retrieving site details', e, site_url) }] };
+        return errorResult(errorText('retrieving site details', e, site_url));
       }
     },
   );

@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
-import { errorText, formatDateTime, jsonResult, textResult } from './helpers.js';
+import { errorText, errorResult, formatDateTime, jsonResult, textResult } from './helpers.js';
 
 /** API response shapes for POST /v1/urlInspection/index:inspect. */
 interface IndexStatusResult {
@@ -265,7 +265,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
 
         return jsonResult(output);
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('inspecting URL', e, site_url) }] };
+        return errorResult(errorText('inspecting URL', e, site_url));
       }
     },
   );
@@ -287,8 +287,8 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url, urls }) => {
       const urlList = parseUrls(urls);
-      if (urlList.length === 0) return textResult('No URLs provided for inspection.');
-      if (urlList.length > 10) return textResult(TOO_MANY_URLS(urlList.length));
+      if (urlList.length === 0) return errorResult('No URLs provided for inspection.');
+      if (urlList.length > 10) return errorResult(TOO_MANY_URLS(urlList.length));
 
       try {
         const results = await runWithConcurrency(urlList, 5, (pageUrl) =>
@@ -301,7 +301,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           quota_note: QUOTA_NOTE,
         });
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('performing batch inspection', e, site_url) }] };
+        return errorResult(errorText('performing batch inspection', e, site_url));
       }
     },
   );
@@ -323,8 +323,8 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
     },
     async ({ site_url, urls }) => {
       const urlList = parseUrls(urls);
-      if (urlList.length === 0) return textResult('No URLs provided for inspection.');
-      if (urlList.length > 10) return textResult(TOO_MANY_URLS(urlList.length));
+      if (urlList.length === 0) return errorResult('No URLs provided for inspection.');
+      if (urlList.length > 10) return errorResult(TOO_MANY_URLS(urlList.length));
 
       try {
         const perUrl = await runWithConcurrency(urlList, 5, (pageUrl) =>
@@ -365,7 +365,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           quota_note: QUOTA_NOTE,
         });
       } catch (e) {
-        return { content: [{ type: 'text', text: errorText('checking indexing issues', e, site_url) }] };
+        return errorResult(errorText('checking indexing issues', e, site_url));
       }
     },
   );
