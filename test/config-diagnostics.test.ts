@@ -141,9 +141,13 @@ async function reauthenticateText(env: Record<string, unknown>): Promise<string>
   return (await tools.reauthenticate!.executor({}, {})).content[0]!.text;
 }
 
-test('reauthenticate says who may open /auth/google', async () => {
-  assert.match(await reauthenticateText({}), /Access user or the MCP_AUTH_TOKEN holder \(Access service tokens are refused\)/);
-  const withAdmins = await reauthenticateText({ GOOGLE_AUTH_ADMINS: 'ops@example.com' });
-  assert.match(withAdmins, /listed in GOOGLE_AUTH_ADMINS/);
+test('reauthenticate describes the configured /auth/google checks', async () => {
+  const both = await reauthenticateText({ MCP_AUTH_MODE: 'cf-access,bearer' });
+  assert.match(both, /it takes a Cloudflare Access user login \(service tokens are refused\) and the MCP_AUTH_TOKEN\./);
+  assert.doesNotMatch(both.split('\n').find((l) => l.startsWith('Only the'))!, / or /);
+  assert.match(await reauthenticateText({ MCP_AUTH_MODE: 'cf-access' }), /it takes a Cloudflare Access user login \(service tokens are refused\)\./);
+  assert.match(await reauthenticateText({ MCP_AUTH_MODE: 'bearer' }), /it takes the MCP_AUTH_TOKEN\./);
+  const withAdmins = await reauthenticateText({ MCP_AUTH_MODE: 'cf-access', GOOGLE_AUTH_ADMINS: 'ops@example.com' });
+  assert.match(withAdmins, /it takes a Cloudflare Access login, with one of those identities listed in GOOGLE_AUTH_ADMINS\./);
   assert.doesNotMatch(withAdmins, /ops@example\.com/, 'admin identities are not disclosed to MCP clients');
 });

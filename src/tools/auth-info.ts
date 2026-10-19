@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { Config } from '../lib/config.js';
 import type { ServerServices } from '../mcp/context.js';
 import { textResult } from './helpers.js';
 
@@ -44,13 +45,11 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
       // readonly covers the read tier; the full webmasters scope covers write
       // and destructive tiers.
       const neededScope = tier === 'read' ? 'readonly' : 'full';
-      const whoMay = svc.config.googleAuth.admins.length > 0
-        ? 'an identity listed in GOOGLE_AUTH_ADMINS'
-        : 'a signed-in Cloudflare Access user or the MCP_AUTH_TOKEN holder (Access service tokens are refused)';
+      const whoMay = authorizeRequirement(svc.config);
       return textResult(
         `On Cloudflare Workers with the GSC_TOKENS KV binding, re-authorize in a browser:
   open https://<worker-host>/auth/google (check status at /auth/google/status).
-Only the deployment's operator can do this: ${whoMay}. Anyone else gets 403,
+Only the deployment's operator can do this: it takes ${whoMay}. Anyone else gets 403,
 so if that is not you, ask the operator.
 The newly stored token replaces the previous one and takes precedence over GOOGLE_REFRESH_TOKEN.
 
@@ -79,4 +78,19 @@ Warnings (plan §6.2):
       );
     },
   );
+}
+
+/** What a request to /auth/google must carry under the configured MCP_AUTH_MODE (all modes must pass). */
+function authorizeRequirement(cfg: Config): string {
+  const admins = cfg.googleAuth.admins.length > 0;
+  const checks: string[] = [];
+  for (const mode of cfg.auth.modes) {
+    if (mode === 'cf-access') {
+      checks.push(admins ? 'a Cloudflare Access login' : 'a Cloudflare Access user login (service tokens are refused)');
+    } else if (mode === 'bearer') {
+      checks.push('the MCP_AUTH_TOKEN');
+    }
+  }
+  const required = checks.length > 0 ? checks.join(' and ') : 'the configured MCP_AUTH_MODE checks';
+  return admins ? `${required}, with one of those identities listed in GOOGLE_AUTH_ADMINS` : required;
 }
