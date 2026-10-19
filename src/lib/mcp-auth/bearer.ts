@@ -7,7 +7,9 @@ import {
   type OAuthTokenVerifier,
 } from '@modelcontextprotocol/server';
 import type { AuthConfig } from '../config.js';
-import type { AuthOutcome } from './types.js';
+import type { AuthIdentity, AuthOutcome } from './types.js';
+
+const STATIC_IDENTITY: AuthIdentity = { mode: 'bearer', id: 'static-bearer', kind: 'static' };
 
 /** AuthInfo validity for static tokens: satisfy the SDK's "must have expiresAt" rule. */
 const AUTHINFO_TTL_SEC = 300;
@@ -59,13 +61,13 @@ export function buildBearerAuthenticator(cfg: AuthConfig): (req: Request) => Pro
     try {
       if (header === 'authorization') {
         const authInfo = await verifyBearerToken(req.headers.get('authorization'), { verifier });
-        return { kind: 'ok', authInfo };
+        return { kind: 'ok', authInfo, identities: [STATIC_IDENTITY] };
       }
       const raw = req.headers.get(header);
       if (!raw) {
         throw new OAuthError(OAuthErrorCode.InvalidToken, `missing ${header} header`);
       }
-      return { kind: 'ok', authInfo: await verifier.verifyAccessToken(raw) };
+      return { kind: 'ok', authInfo: await verifier.verifyAccessToken(raw), identities: [STATIC_IDENTITY] };
     } catch (e) {
       // The SDK's challenge Response may come from a foreign realm; rebuild it
       // with global classes so downstream (Hono, Workers) handles it uniformly.

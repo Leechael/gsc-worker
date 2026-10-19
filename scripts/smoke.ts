@@ -5,14 +5,23 @@
  *   MCP_URL=http://localhost:3001/mcp MCP_AUTH_TOKEN=... npx tsx scripts/smoke.ts \
  *     --site sc-domain:example.com --page https://example.com/
  *
+ * Behind Cloudflare Access, add a service token:
+ *   CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... MCP_URL=https://gsc-mcp.example.com/mcp \
+ *     npx tsx scripts/smoke.ts --site ...
+ *
+ * Expects the readonly scope tier: write/destructive tools must refuse with
+ * tier guidance flagged isError:true.
+ *
  * Strict assertions (review P2-8, residual round): a success must carry a
  * valid tools/call result (result.content[0].text, non-empty) — a bare HTTP
  * 200 with '{}' does not pass. 'error' cases must match a specific message
  * (via `match`), not just any RPC error. 'api400' accepts either success or
  * a Google-side 400 (data-dependent cases like sitemap_index on a non-index).
  */
+import { mcpAuthHeaders } from './mcp-auth-headers.js';
+
 const url = process.env.MCP_URL ?? 'http://localhost:3001/mcp';
-const token = process.env.MCP_AUTH_TOKEN;
+const authHeaders = mcpAuthHeaders();
 const site = arg('site') ?? 'sc-domain:grokbotsdirectory.com';
 const page = arg('page') ?? 'https://grokbotsdirectory.com/';
 
@@ -40,7 +49,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<CallOu
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json, text/event-stream',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...authHeaders,
       },
       body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }),
     });
@@ -156,7 +165,9 @@ const CASES: Case[] = [
   { label: 'submit_sitemap(gate)', tool: 'submit_sitemap', args: { site_url: site, sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
   { label: 'delete_sitemap(gate)', tool: 'delete_sitemap', args: { site_url: site, sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
   { label: 'manage_sitemaps(list)', tool: 'manage_sitemaps', args: { site_url: site, action: 'list' }, expect: 'ok', match: /"sitemaps"/ },
-  { label: 'manage_sitemaps(bogus action)', tool: 'manage_sitemaps', args: { site_url: site, action: 'bogus' }, expect: 'ok', match: /Invalid action/ },
+  { label: 'manage_sitemaps(submit, gate)', tool: 'manage_sitemaps', args: { site_url: site, action: 'submit', sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
+  { label: 'manage_sitemaps(delete, gate)', tool: 'manage_sitemaps', args: { site_url: site, action: 'delete', sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
+  { label: 'manage_sitemaps(bogus action)', tool: 'manage_sitemaps', args: { site_url: site, action: 'bogus' }, expect: 'error', match: /Invalid action/ },
 ];
 
 let pass = 0;
@@ -166,7 +177,8 @@ for (const c of CASES) {
   let good: boolean;
   switch (c.expect) {
     case 'gate':
-      good = out.validResult && out.gated && !out.toolErrored;
+      // A tier refusal is a tool failure (isError:true) carrying upgrade guidance.
+      good = out.validResult && out.gated && out.toolErrored;
       break;
     case 'error':
       // Expected tool-level rejection: must be a well-formed tools/call result

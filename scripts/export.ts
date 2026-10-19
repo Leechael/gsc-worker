@@ -8,8 +8,16 @@
  * Or against any remote MCP_URL with a token:
  *   MCP_URL=https://gsc-mcp.example.com/mcp MCP_AUTH_TOKEN=... npx tsx scripts/export.ts ...
  *
- * Non-JSON results (error text, guidance) are written as-is with a warning.
+ * Behind Cloudflare Access, use a service token (optionally with MCP_AUTH_TOKEN too):
+ *   MCP_URL=https://gsc-mcp.example.com/mcp CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... \
+ *     npx tsx scripts/export.ts ...
+ *
+ * Tool failures (isError:true: validation, tier refusal, API error) exit 1
+ * without writing the file. Non-JSON successful results (guidance text) are
+ * written as-is with a warning.
  */
+import { mcpAuthHeaders } from './mcp-auth-headers.js';
+
 const [, , tool, outFile, ...rest] = process.argv;
 
 if (!tool || !outFile) {
@@ -26,14 +34,13 @@ for (let i = 0; i < rest.length; i += 2) {
 }
 
 const url = process.env.MCP_URL ?? 'http://localhost:3001/mcp';
-const token = process.env.MCP_AUTH_TOKEN;
 
 const res = await fetch(url, {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...mcpAuthHeaders(),
   },
   body: JSON.stringify({
     jsonrpc: '2.0',
@@ -45,7 +52,13 @@ const res = await fetch(url, {
 
 const text = await res.text();
 const dataLine = text.split('\n').find((l) => l.startsWith('data: '));
-const data = JSON.parse(dataLine ? dataLine.slice(6) : text);
+let data;
+try {
+  data = JSON.parse(dataLine ? dataLine.slice(6) : text);
+} catch {
+  console.error(`HTTP ${res.status}: unparseable response: ${text.slice(0, 300)}`);
+  process.exit(1);
+}
 
 if (data.error) {
   console.error(`MCP error: ${data.error.message}`);
@@ -54,6 +67,10 @@ if (data.error) {
 const inner = data?.result?.content?.[0]?.text;
 if (typeof inner !== 'string') {
   console.error('Unexpected result shape:', JSON.stringify(data).slice(0, 300));
+  process.exit(1);
+}
+if (data.result.isError === true) {
+  console.error(`Tool ${tool} failed:\n${inner}`);
   process.exit(1);
 }
 

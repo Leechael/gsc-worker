@@ -61,7 +61,10 @@ export class GscClient {
       if (v != null) url.searchParams.set(k, v);
     }
 
-    const accessToken = await this.opts.tokenProvider.getAccessToken();
+    let accessToken = await this.opts.tokenProvider.getAccessToken();
+    // A cached access token can be revoked before it expires (disconnect or
+    // re-authorization in another isolate); retry once with a fresh one.
+    let retriedUnauthorized = false;
 
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
@@ -87,6 +90,15 @@ export class GscClient {
         // Success with no body (204, or 200-empty as some GSC endpoints return).
         if (res.status === 204) return undefined as T;
         return (await res.json().catch(() => undefined)) as T;
+      }
+
+      if (res.status === 401 && !retriedUnauthorized) {
+        retriedUnauthorized = true;
+        await res.body?.cancel();
+        this.opts.tokenProvider.invalidateAccessToken();
+        accessToken = await this.opts.tokenProvider.getAccessToken();
+        attempt--;
+        continue;
       }
 
       const errBody = (await res.json().catch(() => null)) as GoogleErrorBody | null;
