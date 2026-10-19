@@ -1,0 +1,33 @@
+{
+  "name": "gsc-mcp-ts",
+  "version": "0.1.0",
+  "description": "Google Search Console MCP Server (TypeScript) — Hono, runs on Node 24 and Cloudflare Workers",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/node.ts",
+    "dev:stdio": "tsx src/stdio.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "auth": "tsx scripts/auth.ts",
+    "discovery-check": "tsx scripts/discovery-check.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.17",
+    "@modelcontextprotocol/hono": "2.0.2",
+    "@modelcontextprotocol/server": "2.3.1",
+    "hono": "^4.13.0",
+    "jose": "^6.2.12",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}

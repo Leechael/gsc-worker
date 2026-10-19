@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gsc-mcp-ts",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-19",
+  // 预期不需要 nodejs_compat —— M1 实测后定稿 (plan §5)
+  "workers_dev": false,
+  "preview_urls": false,
+  // 部署时配置 custom_domain 路由; vars 与 secrets 见 plan §5
+  "vars": {
+    "MCP_AUTH_MODE": "cf-access"
+  }
+}
