@@ -30,6 +30,13 @@ const INCOMPLETE_NOTE = 'first_incomplete_date and first_incomplete_hour are in 
 const SORT_METRICS = ['clicks', 'impressions', 'ctr', 'position'] as const;
 type SortMetric = (typeof SORT_METRICS)[number];
 
+/**
+ * `.default()` rejects JSON null. Null and omission both resolve to `fallback`.
+ */
+function nullMeansDefault<T>(schema: z.ZodType<T>, fallback: T) {
+  return z.union([schema, z.null()]).optional().transform((value): T => (value == null ? fallback : value));
+}
+
 interface SearchAnalyticsRow {
   keys?: string[];
   clicks?: number;
@@ -231,17 +238,17 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
         ),
-        // Explicit JSON null means omitted. `.optional()` rejects null.
+        // Explicit JSON null is omitted, including on defaulted fields.
         start_date: z.string().nullish()
           .describe('Start date in YYYY-MM-DD format (defaults to 28 days ago, Pacific Time).'),
         end_date: z.string().nullish()
           .describe('End date in YYYY-MM-DD format (defaults to today, Pacific Time).'),
-        dimensions: z.string().default('query')
+        dimensions: nullMeansDefault(z.string(), 'query')
           .describe('Dimensions to group by, comma-separated (e.g., "query,page,device").'),
-        search_type: z.string().default('web').describe(
+        search_type: nullMeansDefault(z.string(), 'web').describe(
           'Type of search results: web, image, video, news, discover, or googleNews (case-insensitive, default web).',
         ),
-        row_limit: z.number().int().min(1).max(API_PAGE_MAX).default(1000).describe(
+        row_limit: nullMeansDefault(z.number().int().min(1).max(API_PAGE_MAX), 1000).describe(
           `Rows per API page (default 1000, max ${API_PAGE_MAX} per request).`,
         ),
         max_rows: z.number().int().min(1).max(100000).nullish().describe(
@@ -249,17 +256,17 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           'single-page behavior). Set higher than row_limit to page through more data; each API page ' +
           `still carries at most ${API_PAGE_MAX} rows.`,
         ),
-        start_row: z.number().int().min(0).default(0).describe('Starting row for pagination (default 0).'),
-        sort_by: z.enum(SORT_METRICS).default('clicks').describe(
+        start_row: nullMeansDefault(z.number().int().min(0), 0).describe('Starting row for pagination (default 0).'),
+        sort_by: nullMeansDefault(z.enum(SORT_METRICS), 'clicks').describe(
           'Metric to sort by (clicks, impressions, ctr, position). Applied client-side to the returned rows, ' +
           'since Google only sorts by clicks.',
         ),
-        sort_direction: z.enum(['ascending', 'descending']).default('descending').describe(
+        sort_direction: nullMeansDefault(z.enum(['ascending', 'descending']), 'descending').describe(
           'Sort direction. For position, ascending puts the best (lowest) average position first.',
         ),
         filter_dimension: z.string().nullish()
           .describe('Single filter dimension. Use "filters" instead for multiple filters.'),
-        filter_operator: z.string().default('contains').describe('Single filter operator.'),
+        filter_operator: nullMeansDefault(z.string(), 'contains').describe('Single filter operator.'),
         filter_expression: z.string().nullish().describe('Single filter expression value.'),
         filters: z.string().nullish().describe(
           'JSON array of filter objects with dimension/operator/expression keys, ANDed together. ' +
@@ -365,7 +372,10 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           if (!validated.ok) return jsonError({ error: validated.error });
           activeFilters = validated.filters;
           filterGroups = [{ groupType: 'AND', filters: activeFilters }];
-        } else if (filter_dimension != null && filter_expression != null) {
+        } else if (filter_dimension != null || filter_expression != null) {
+          if (filter_dimension == null || filter_expression == null) {
+            return jsonError({ error: 'filter_dimension and filter_expression must be provided together.' });
+          }
           const validated = validateFilterList([{
             dimension: filter_dimension,
             operator: filter_operator,

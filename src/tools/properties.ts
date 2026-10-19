@@ -122,7 +122,10 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
         );
         return textResult(`Site ${site_url} has been added to Search Console.`);
       } catch (e) {
-        return errorResult(siteMutationError(e, 'adding', site_url));
+        const message = siteMutationError(e, 'adding', site_url);
+        // 409 means the site is already added — the requested state already holds.
+        if (e instanceof GscApiError && e.status === 409) return textResult(message);
+        return errorResult(message);
       }
     },
   );
@@ -150,7 +153,10 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
         });
         return textResult(`Site ${site_url} has been removed from Search Console.`);
       } catch (e) {
-        return errorResult(siteMutationError(e, 'removing', site_url));
+        const message = siteMutationError(e, 'removing', site_url);
+        // 404 means the site is already gone — the requested state already holds.
+        if (e instanceof GscApiError && e.status === 404) return textResult(message);
+        return errorResult(message);
       }
     },
   );

@@ -21,6 +21,7 @@ import { registerAnalyticsTools } from '../src/tools/analytics.js';
 import { registerInspectionTools } from '../src/tools/inspection.js';
 import { registerPropertiesTools } from '../src/tools/properties.js';
 import { registerSitemapsTools } from '../src/tools/sitemaps.js';
+import { jsonError } from '../src/tools/helpers.js';
 
 interface ToolResult {
   content: { text: string }[];
@@ -79,6 +80,7 @@ function schemaAllowsNull(prop: { type?: string | string[]; anyOf?: { type?: str
 const NULLABLE_FIELDS: Record<string, string[]> = {
   get_advanced_search_analytics: [
     'start_date', 'end_date', 'max_rows', 'filter_dimension', 'filter_expression', 'filters', 'data_state',
+    'dimensions', 'search_type', 'row_limit', 'start_row', 'sort_by', 'sort_direction', 'filter_operator',
   ],
   list_sitemaps_enhanced: ['sitemap_index'],
   manage_sitemaps: ['sitemap_url', 'sitemap_index'],
@@ -192,11 +194,218 @@ test('validation failures set isError; an empty result does not', async () => {
 
 test('a scope-tier refusal is an error result', async () => {
   const { svc } = harness(() => ({}));
+  svc.config.scopeTier = 'read';
   const server = new McpServer({ name: 't', version: '0' });
   registerPropertiesTools(server, svc);
   const result = await toolsOf(server).add_site!.executor({ site_url: 'https://example.com/' }, {});
   assert.equal(result.isError, true);
   assert.match(result.content[0]!.text, /disabled at the current scope tier/);
+});
+
+test('explicit null on defaulted advanced-analytics arguments keeps the default', () => {
+  const tool = toolsOf(buildMcpServer()).get_advanced_search_analytics!;
+  const parsed = tool.inputSchema.safeParse({
+    site_url: 'https://example.com/',
+    dimensions: null,
+    search_type: null,
+    row_limit: null,
+    start_row: null,
+    sort_by: null,
+    sort_direction: null,
+    filter_operator: null,
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const data = parsed.data as {
+    dimensions: string;
+    search_type: string;
+    row_limit: number;
+    start_row: number;
+    sort_by: string;
+    sort_direction: string;
+    filter_operator: string;
+  };
+  assert.equal(data.dimensions, 'query');
+  assert.equal(data.search_type, 'web');
+  assert.equal(data.row_limit, 1000);
+  assert.equal(data.start_row, 0);
+  assert.equal(data.sort_by, 'clicks');
+  assert.equal(data.sort_direction, 'descending');
+  assert.equal(data.filter_operator, 'contains');
+});
+
+test('a one-sided advanced filter is an error and does not query', async () => {
+  const { svc, calls } = harness(() => ({ rows: [] }));
+  const server = new McpServer({ name: 't', version: '0' });
+  registerAdvancedAnalyticsTools(server, svc);
+  const missingExpression = await toolsOf(server).get_advanced_search_analytics!.executor({
+    ...ADVANCED_REQUIRED,
+    filter_dimension: 'query',
+    filter_expression: null,
+  }, {});
+  assert.equal(missingExpression.isError, true);
+  const body = JSON.parse(missingExpression.content[0]!.text) as { error?: string };
+  assert.match(body.error ?? '', /filter_dimension and filter_expression must be provided together/);
+  assert.equal(calls.length, 0);
+
+  const missingDimension = await toolsOf(server).get_advanced_search_analytics!.executor({
+    ...ADVANCED_REQUIRED,
+    filter_dimension: null,
+    filter_expression: 'brand',
+  }, {});
+  assert.equal(missingDimension.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('jsonError turns an undefined payload into JSON null', () => {
+  const result = jsonError(undefined);
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0]!.text, 'null');
+});
+
+function statusSvc(status: number, body: unknown, scopeTier: 'read' | 'destructive' = 'read'): ServerServices {
+  const tokenProvider = new TokenProvider(
+    { clientId: 'i', clientSecret: 's', refreshToken: 'r', scopes: [] },
+    (async () => new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }))) as typeof fetch,
+  );
+  const fetchImpl = (async () => new Response(
+    typeof body === 'string' ? body : JSON.stringify(body),
+    { status },
+  )) as typeof fetch;
+  return {
+    config: { ...parseConfig(), scopeTier },
+    tokenProvider,
+    gsc: new GscClient({ tokenProvider, fetchImpl, maxAttempts: 1 }),
+  };
+}
+
+test('add_site 409 and delete_site 404 are already the requested state', async () => {
+  const addServer = new McpServer({ name: 't', version: '0' });
+  registerPropertiesTools(addServer, statusSvc(409, { error: { code: 409, message: 'Conflict' } }, 'destructive'));
+  const added = await toolsOf(addServer).add_site!.executor({ site_url: 'https://example.com/' }, {});
+  assert.notEqual(added.isError, true);
+  assert.match(added.content[0]!.text, /already added/);
+
+  const deleteServer = new McpServer({ name: 't', version: '0' });
+  registerPropertiesTools(deleteServer, statusSvc(404, { error: { code: 404, message: 'Not Found' } }, 'destructive'));
+  const removed = await toolsOf(deleteServer).delete_site!.executor({ site_url: 'https://example.com/' }, {});
+  assert.notEqual(removed.isError, true);
+  assert.match(removed.content[0]!.text, /was not found/);
+
+  const denied = new McpServer({ name: 't', version: '0' });
+  registerPropertiesTools(denied, statusSvc(403, {
+    error: { code: 403, message: 'forbidden', details: [{ reason: 'forbidden' }] },
+  }, 'destructive'));
+  const failure = await toolsOf(denied).add_site!.executor({ site_url: 'https://example.com/' }, {});
+  assert.equal(failure.isError, true);
+});
+
+test('an empty sitemap details body is not an error', async () => {
+  const svc = statusSvc(200, '');
+  const server = new McpServer({ name: 't', version: '0' });
+  registerSitemapsTools(server, svc);
+  const result = await toolsOf(server).get_sitemap_details!.executor({
+    site_url: 'https://example.com/',
+    sitemap_url: 'https://example.com/sitemap.xml',
+  }, {});
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0]!.text, /No details found/);
+});
+
+const INDEXED_INSPECTION = {
+  inspectionResult: {
+    indexStatusResult: {
+      verdict: 'PASS',
+      coverageState: 'Submitted and indexed',
+      pageFetchState: 'SUCCESSFUL',
+      robotsTxtState: 'ALLOWED',
+    },
+  },
+};
+
+function inspectionSvc(
+  respond: (pageUrl: string) => { status: number; body: unknown },
+): ServerServices {
+  const tokenProvider = new TokenProvider(
+    { clientId: 'i', clientSecret: 's', refreshToken: 'r', scopes: [] },
+    (async () => new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }))) as typeof fetch,
+  );
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) as { inspectionUrl?: string } : {};
+    const response = respond(body.inspectionUrl ?? '');
+    const payload = typeof response.body === 'string' ? response.body : JSON.stringify(response.body);
+    return new Response(payload, { status: response.status });
+  }) as typeof fetch;
+  return {
+    config: parseConfig(),
+    tokenProvider,
+    gsc: new GscClient({ tokenProvider, fetchImpl, maxAttempts: 1 }),
+  };
+}
+
+test('a batch where every URL fails sets isError; a mixed batch does not', async () => {
+  const forbidden = { error: { code: 403, message: 'Permission denied' } };
+  const allFailed = new McpServer({ name: 't', version: '0' });
+  registerInspectionTools(allFailed, inspectionSvc(() => ({ status: 403, body: forbidden })));
+  const failed = await toolsOf(allFailed).batch_url_inspection!.executor({
+    site_url: 'sc-domain:example.com',
+    urls: 'https://example.com/a\nhttps://example.com/b',
+  }, {});
+  assert.equal(failed.isError, true);
+  const failedBody = JSON.parse(failed.content[0]!.text) as { results: { error?: string }[] };
+  assert.equal(failedBody.results.length, 2);
+  assert.ok(failedBody.results.every((row) => typeof row.error === 'string'));
+
+  const mixed = new McpServer({ name: 't', version: '0' });
+  registerInspectionTools(mixed, inspectionSvc((pageUrl) => (
+    pageUrl.endsWith('/b')
+      ? { status: 403, body: forbidden }
+      : { status: 200, body: INDEXED_INSPECTION }
+  )));
+  const partial = await toolsOf(mixed).batch_url_inspection!.executor({
+    site_url: 'sc-domain:example.com',
+    urls: 'https://example.com/a\nhttps://example.com/b',
+  }, {});
+  assert.notEqual(partial.isError, true);
+});
+
+test('indexing request failures stay out of not_indexed and fail the call when every URL fails', async () => {
+  const forbidden = { error: { code: 403, message: 'Permission denied' } };
+  const allFailed = new McpServer({ name: 't', version: '0' });
+  registerInspectionTools(allFailed, inspectionSvc(() => ({ status: 403, body: forbidden })));
+  const failed = await toolsOf(allFailed).check_indexing_issues!.executor({
+    site_url: 'sc-domain:example.com',
+    urls: 'https://example.com/a\nhttps://example.com/b',
+  }, {});
+  assert.equal(failed.isError, true);
+  const failedBody = JSON.parse(failed.content[0]!.text) as {
+    request_failures?: string[];
+    summary?: { not_indexed: number };
+  };
+  assert.equal(failedBody.request_failures?.length, 2);
+  assert.equal(failedBody.summary, undefined);
+
+  const mixed = new McpServer({ name: 't', version: '0' });
+  registerInspectionTools(mixed, inspectionSvc((pageUrl) => (
+    pageUrl.endsWith('/b')
+      ? { status: 403, body: forbidden }
+      : { status: 200, body: INDEXED_INSPECTION }
+  )));
+  const partial = await toolsOf(mixed).check_indexing_issues!.executor({
+    site_url: 'sc-domain:example.com',
+    urls: 'https://example.com/a\nhttps://example.com/b',
+  }, {});
+  assert.notEqual(partial.isError, true);
+  const partialBody = JSON.parse(partial.content[0]!.text) as {
+    summary: { indexed: number; not_indexed: number; request_failures: number };
+    request_failures: string[];
+    issues: { not_indexed: string[] };
+  };
+  assert.equal(partialBody.summary.indexed, 1);
+  assert.equal(partialBody.summary.not_indexed, 0);
+  assert.equal(partialBody.summary.request_failures, 1);
+  assert.equal(partialBody.issues.not_indexed.length, 0);
+  assert.equal(partialBody.request_failures.length, 1);
 });
 
 // ---------- period deltas ----------

@@ -17,12 +17,13 @@ export function errorResult(text: string): { isError: true; content: { type: 'te
 }
 
 export function jsonResult(value: unknown): { content: { type: 'text'; text: string }[] } {
-  return textResult(JSON.stringify(value, null, 2));
+  return textResult(JSON.stringify(value ?? null, null, 2));
 }
 
 /** JSON payload that describes a failed call (validation, refusal, API error). */
 export function jsonError(value: unknown): { isError: true; content: { type: 'text'; text: string }[] } {
-  return errorResult(JSON.stringify(value, null, 2));
+  // JSON.stringify(undefined) is undefined, which is not a valid MCP text block.
+  return errorResult(JSON.stringify(value ?? null, null, 2));
 }
 
 /**

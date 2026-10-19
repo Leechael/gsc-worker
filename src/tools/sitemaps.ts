@@ -149,7 +149,7 @@ async function getSitemapDetails(
     const details = await svc.gsc.request<SitemapDetails>(sitemapsPath(siteUrl, sitemapUrl));
 
     if (!details) {
-      return errorResult(`No details found for sitemap ${sitemapUrl}.`);
+      return textResult(`No details found for sitemap ${sitemapUrl}.`);
     }
 
     const isIndex = details.isSitemapsIndex ?? false;

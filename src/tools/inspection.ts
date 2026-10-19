@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
-import { errorText, errorResult, formatDateTime, jsonResult, textResult } from './helpers.js';
+import { errorText, errorResult, formatDateTime, jsonError, jsonResult, textResult } from './helpers.js';
 
 /** API response shapes for POST /v1/urlInspection/index:inspect. */
 interface IndexStatusResult {
@@ -165,12 +165,18 @@ interface IndexingClassification {
   indexed: string | null;
 }
 
-/** One classification; never throws — failures land in `not_indexed`. */
+interface IndexingCheck {
+  classification: IndexingClassification | null;
+  /** Set when the inspection request itself failed. Not an indexing state. */
+  error: string | null;
+}
+
+/** One classification; never throws. Request failures stay out of the buckets. */
 async function checkIndexingSingleUrl(
   svc: ServerServices,
   siteUrl: string,
   pageUrl: string,
-): Promise<IndexingClassification> {
+): Promise<IndexingCheck> {
   const result: IndexingClassification = {
     not_indexed: null,
     canonical_issues: null,
@@ -183,7 +189,7 @@ async function checkIndexingSingleUrl(
     const inspection = response.inspectionResult;
     if (!inspection) {
       result.not_indexed = `${pageUrl} - No inspection data found`;
-      return result;
+      return { classification: result, error: null };
     }
 
     const indexStatus = inspection.indexStatusResult ?? {};
@@ -210,10 +216,11 @@ async function checkIndexingSingleUrl(
     if (fetchState !== 'SUCCESSFUL') {
       result.fetch_issues = `${pageUrl} - ${fetchState}`;
     }
+    return { classification: result, error: null };
   } catch (e) {
-    result.not_indexed = `${pageUrl} - Error: ${e instanceof Error ? e.message : String(e)}`;
+    const message = e instanceof Error ? e.message : String(e);
+    return { classification: null, error: `${pageUrl} - Error: ${message}` };
   }
-  return result;
 }
 
 export function registerInspectionTools(server: McpServer, svc: ServerServices): void {
@@ -298,12 +305,16 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
         const results = await runWithConcurrency(urlList, 5, (pageUrl) =>
           inspectSingleUrl(svc, site_url, pageUrl),
         );
-        return jsonResult({
+        const payload = {
           site_url,
           count: results.length,
           results,
           quota_note: QUOTA_NOTE,
-        });
+        };
+        // Per-row errors are data when the batch is mixed. A batch where every
+        // URL failed is an API failure and must set isError.
+        if (results.every((row) => 'error' in row)) return jsonError(payload);
+        return jsonResult(payload);
       } catch (e) {
         return errorResult(errorText('performing batch inspection', e, site_url));
       }
@@ -342,11 +353,26 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           fetch_issues: [],
           indexed: [],
         };
+        const requestFailures: string[] = [];
         for (const entry of perUrl) {
+          if (entry.error !== null) {
+            requestFailures.push(entry.error);
+            continue;
+          }
+          const classification = entry.classification;
+          if (classification === null) continue;
           for (const category of Object.keys(issuesSummary) as (keyof IndexingClassification)[]) {
-            const value = entry[category];
+            const value = classification[category];
             if (value !== null) issuesSummary[category].push(value);
           }
+        }
+
+        if (requestFailures.length === urlList.length) {
+          return jsonError({
+            error: 'Indexing check failed for every URL.',
+            site_url,
+            request_failures: requestFailures,
+          });
         }
 
         return jsonResult({
@@ -358,7 +384,9 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
             canonical_issues: issuesSummary.canonical_issues.length,
             robots_blocked: issuesSummary.robots_blocked.length,
             fetch_issues: issuesSummary.fetch_issues.length,
+            request_failures: requestFailures.length,
           },
+          request_failures: requestFailures,
           issues: {
             not_indexed: issuesSummary.not_indexed,
             canonical_issues: issuesSummary.canonical_issues,
