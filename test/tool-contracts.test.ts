@@ -213,7 +213,7 @@ test('manage_sitemaps submit and delete are refused at the read tier without cal
       {},
     );
     assert.equal(result.isError, true, action);
-    assert.match(result.content[0]!.text, /^Safety: (submit|delete)_sitemap/, action);
+    assert.match(result.content[0]!.text, new RegExp(`^Safety: ${action}_sitemap `), action);
   }
   assert.equal(calls.length, 0);
 });
