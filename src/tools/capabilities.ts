@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ServerServices } from '../mcp/context.js';
+import { scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
 
 const AEO_GEO_BOUNDARY = `
@@ -36,13 +37,29 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
     },
     async () => {
       const status = await svc.tokenProvider.status();
-      const authStatus = status.configured
-        ? status.error
-          ? `⚠️ Credentials configured, but the last token refresh failed:\n${status.error}`
-          : '✅ Credentials configured — ready to use all tools in the current scope tier.'
-        : '❌ Not authenticated — on Cloudflare Workers with the GSC_TOKENS KV binding, open https://<worker-host>/auth/google in a browser. ' +
-          'Otherwise run: npm run auth -- --scopes readonly --client-secrets <downloaded.json> --out gsc-credentials.json, ' +
-          'then set GSC_CREDENTIALS_FILE (Node/Docker) or the three GOOGLE_* env vars / wrangler secrets.';
+      const notAuthenticated =
+        '❌ Not authenticated — on Cloudflare Workers with the GSC_TOKENS KV binding, open https://<worker-host>/auth/google in a browser. ' +
+        'Otherwise run: npm run auth -- --scopes readonly --client-secrets <downloaded.json> --out gsc-credentials.json, ' +
+        'then set GSC_CREDENTIALS_FILE (Node/Docker) or the three GOOGLE_* env vars / wrangler secrets.';
+      let authStatus: string;
+      if (!status.clientConfigured) {
+        authStatus =
+          status.source === 'none'
+            ? `❌ GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not both set.\n${notAuthenticated}`
+            : `❌ A refresh token is present (source: ${status.source}), but GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not both set, ` +
+              'so it cannot be used. Set them (wrangler secret put on Workers).';
+      } else if (status.source === 'none') {
+        authStatus = notAuthenticated;
+      } else if (status.error) {
+        authStatus = `⚠️ Credentials configured, but the last token refresh failed:\n${status.error}`;
+      } else {
+        authStatus = '✅ Credentials configured — ready to use all tools in the current scope tier.';
+      }
+      if (status.source === 'kv' && status.stored && !scopesCover(status.stored.scope, svc.config.google.scopes)) {
+        authStatus +=
+          `\n⚠️ The stored grant (scope: ${status.stored.scope}) does not cover the configured GSC_SCOPES; ` +
+          'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+      }
       const tokenSource = {
         kv: `kv (authorized in-Worker via /auth/google${status.stored ? `, stored ${status.stored.storedAt}` : ''}${status.stored?.email ? `, account ${status.stored.email}` : ''})`,
         env: 'env (GOOGLE_REFRESH_TOKEN)',

@@ -317,9 +317,19 @@ function validateGoogleAuthStorage(cfg: Config, entry: 'node' | 'worker'): strin
   return errors;
 }
 
+/** Body of the fail-closed 503; the actual errors are only logged. */
+export const INVALID_CONFIG_MESSAGE =
+  'Service unavailable: invalid server configuration. The cause is in the server logs (on Cloudflare: wrangler tail).';
+
 /** Non-fatal configuration warnings (plan §6.1: startup warning). */
-export function validateHttpWarnings(cfg: Config): string[] {
+export function validateHttpWarnings(cfg: Config, entry: EntryKind = 'node'): string[] {
   const warnings: string[] = [];
+  if (entry === 'worker' && !cfg.allowedHosts?.length) {
+    warnings.push(
+      'MCP_ALLOWED_HOSTS is not set: host validation only accepts localhost, so every request to the deployed ' +
+        "Worker's hostname is rejected with 403. Set MCP_ALLOWED_HOSTS to the Worker's public hostname(s).",
+    );
+  }
   if (cfg.allowDestructive && cfg.scopeTier !== 'destructive') {
     warnings.push(
       'GSC_ALLOW_DESTRUCTIVE=true has no effect at the readonly scope tier: ' +

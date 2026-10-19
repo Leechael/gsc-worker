@@ -1,6 +1,6 @@
 import type { Context, Hono } from 'hono';
 import type { Config } from '../config.js';
-import { GOOGLE_CALLBACK_PATH, isLoopbackHost, TOKEN_KV_BINDING } from '../config.js';
+import { GOOGLE_CALLBACK_PATH, INVALID_CONFIG_MESSAGE, isLoopbackHost, TOKEN_KV_BINDING } from '../config.js';
 import type { AuthBuildResult, AuthIdentity } from '../mcp-auth/index.js';
 import type { ServerServices } from '../../mcp/context.js';
 import { pkceChallenge, randomToken } from './crypto.js';
@@ -85,7 +85,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     }
     const gateResult = deps.auth();
     if (!gateResult.ok) {
-      return c.text('Service unavailable: invalid MCP auth configuration.', 503);
+      return c.text(INVALID_CONFIG_MESSAGE, 503);
     }
     const outcome = await gateResult.authenticate(c.req.raw);
     if (outcome.kind === 'deny') return outcome.response;

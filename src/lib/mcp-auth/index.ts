@@ -1,6 +1,5 @@
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import type { Config } from '../config.js';
-import { validateHttpWarnings } from '../config.js';
 import { buildBearerAuthenticator } from './bearer.js';
 import { buildCfAccessAuthenticator } from './cf-access.js';
 import { buildNoneAuthenticator } from './none.js';
@@ -34,11 +33,6 @@ export function buildAuthenticator(cfg: Config, startupErrors: string[]): AuthBu
 const memo = new WeakMap<Config, AuthBuildResult>();
 
 function buildUncached(cfg: Config, startupErrors: string[]): AuthBuildResult {
-  for (const w of validateHttpWarnings(cfg)) {
-    // Once per config instance — avoids per-request log spam on Workers.
-    console.warn(`gsc-mcp-ts: warning: ${w}`);
-  }
-
   if (startupErrors.length > 0) {
     return { ok: false, errors: [...startupErrors] };
   }
