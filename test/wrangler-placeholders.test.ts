@@ -36,3 +36,17 @@ test('comment stripping leaves // and /* inside strings alone', () => {
   const text = '{ "a": "https://x/*y*/", // note\n "b": 1, /* gone */ }';
   assert.deepEqual(JSON.parse(stripJsonc(text)), { a: 'https://x/*y*/', b: 1 });
 });
+
+test('trailing-comma removal does not touch string values', () => {
+  const text = '{ "vars": { "A": "x,}", "B": "y, ]", }, "list": [1, 2,], }';
+  assert.deepEqual(JSON.parse(stripJsonc(text)), { vars: { A: 'x,}', B: 'y, ]' }, list: [1, 2] });
+});
+
+test('the template stays valid when its optional vars are uncommented', () => {
+  const uncommented = TEMPLATE.replace(/^(\s*)\/\/ ("[A-Z_]+": "[^"]*",?)(.*)$/gm, '$1$2$3');
+  assert.match(uncommented, /^\s*"GOOGLE_REDIRECT_URI"/m);
+  const vars = (JSON.parse(stripJsonc(uncommented)) as { vars: Record<string, string> }).vars;
+  assert.equal(vars.GSC_ALLOW_DESTRUCTIVE, 'false');
+  assert.ok(vars.GOOGLE_AUTH_ADMINS);
+});
+

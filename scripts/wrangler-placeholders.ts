@@ -44,9 +44,12 @@ export function stripJsonc(text: string): string {
       const end = text.indexOf('*/', i + 2);
       i = end === -1 ? text.length : end + 2;
     } else {
+      // Strings and comments are already consumed, so a comma before a
+      // closing bracket here is always a JSONC trailing comma.
+      if (ch === '}' || ch === ']') out = out.replace(/,(\s*)$/, '$1');
       out += ch;
       i++;
     }
   }
-  return out.replace(/,(\s*[}\]])/g, '$1');
+  return out;
 }

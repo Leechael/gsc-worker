@@ -31,3 +31,17 @@ test('half a service token is an error', () => {
   assert.throws(() => mcpAuthHeaders({ CF_ACCESS_CLIENT_ID: 'id' }), /both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET/);
   assert.throws(() => mcpAuthHeaders({ CF_ACCESS_CLIENT_SECRET: 's' }));
 });
+
+test('an empty MCP_BEARER_HEADER means the default Authorization header, as on the server', () => {
+  assert.deepEqual(mcpAuthHeaders({ MCP_AUTH_TOKEN: 't', MCP_BEARER_HEADER: '' }), { Authorization: 'Bearer t' });
+});
+
+test('MCP_BEARER_HEADER may not reuse a header the scripts already send', () => {
+  for (const name of ['CF-Access-Client-Id', 'cf-access-client-secret', 'Accept', 'content-type']) {
+    assert.throws(
+      () => mcpAuthHeaders({ MCP_AUTH_TOKEN: 't', MCP_BEARER_HEADER: name, CF_ACCESS_CLIENT_ID: 'i', CF_ACCESS_CLIENT_SECRET: 's' }),
+      /collides/,
+      name,
+    );
+  }
+});

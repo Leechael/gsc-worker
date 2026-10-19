@@ -165,6 +165,8 @@ const CASES: Case[] = [
   { label: 'submit_sitemap(gate)', tool: 'submit_sitemap', args: { site_url: site, sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
   { label: 'delete_sitemap(gate)', tool: 'delete_sitemap', args: { site_url: site, sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
   { label: 'manage_sitemaps(list)', tool: 'manage_sitemaps', args: { site_url: site, action: 'list' }, expect: 'ok', match: /"sitemaps"/ },
+  { label: 'manage_sitemaps(submit, gate)', tool: 'manage_sitemaps', args: { site_url: site, action: 'submit', sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
+  { label: 'manage_sitemaps(delete, gate)', tool: 'manage_sitemaps', args: { site_url: site, action: 'delete', sitemap_url: `${page}sitemap.xml` }, expect: 'gate' },
   { label: 'manage_sitemaps(bogus action)', tool: 'manage_sitemaps', args: { site_url: site, action: 'bogus' }, expect: 'error', match: /Invalid action/ },
 ];
 

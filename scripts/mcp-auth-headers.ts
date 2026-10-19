@@ -8,6 +8,9 @@
  *
  * Both can be set at once (MCP_AUTH_MODE=cf-access,bearer).
  */
+/** Sent by the scripts themselves; a bearer header with one of these names would merge with or replace it. */
+const RESERVED_HEADERS = new Set(['cf-access-client-id', 'cf-access-client-secret', 'content-type', 'accept', 'host']);
+
 export function mcpAuthHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -23,9 +26,12 @@ export function mcpAuthHeaders(env: Record<string, string | undefined> = process
 
   const token = env.MCP_AUTH_TOKEN;
   if (token) {
-    const header = (env.MCP_BEARER_HEADER ?? 'authorization').toLowerCase();
+    // Empty means unset, as on the server.
+    const header = (env.MCP_BEARER_HEADER || 'authorization').toLowerCase();
     if (header === 'authorization') {
       headers.Authorization = `Bearer ${token}`;
+    } else if (RESERVED_HEADERS.has(header)) {
+      throw new Error(`MCP_BEARER_HEADER '${header}' collides with a header the scripts already send; pick another name.`);
     } else {
       headers[header] = token;
     }

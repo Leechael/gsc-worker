@@ -202,6 +202,22 @@ test('a scope-tier refusal is an error result', async () => {
   assert.match(result.content[0]!.text, /disabled at the current scope tier/);
 });
 
+test('manage_sitemaps submit and delete are refused at the read tier without calling Google', async () => {
+  const { svc, calls } = harness(() => ({}));
+  svc.config.scopeTier = 'read';
+  const server = new McpServer({ name: 't', version: '0' });
+  registerSitemapsTools(server, svc);
+  for (const action of ['submit', 'delete']) {
+    const result = await toolsOf(server).manage_sitemaps!.executor(
+      { site_url: 'sc-domain:example.com', action, sitemap_url: 'https://example.com/sitemap.xml' },
+      {},
+    );
+    assert.equal(result.isError, true, action);
+    assert.match(result.content[0]!.text, /^Safety: (submit|delete)_sitemap/, action);
+  }
+  assert.equal(calls.length, 0);
+});
+
 test('explicit null on defaulted advanced-analytics arguments keeps the default', () => {
   const tool = toolsOf(buildMcpServer()).get_advanced_search_analytics!;
   const parsed = tool.inputSchema.safeParse({
