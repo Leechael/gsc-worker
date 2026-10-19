@@ -105,8 +105,10 @@ export function buildCfAccessAuthenticator(
       },
       identities: [
         email
-          ? { mode: 'cf-access', id: email, kind: 'user' }
-          : { mode: 'cf-access', id: commonName!, kind: 'service' },
+          // Lowercased: the pending OAuth state is bound to this id, and an
+          // email's casing can differ between logins (e.g. one-time PIN).
+          ? { mode: 'cf-access', id: email.toLowerCase(), kind: 'user' }
+          : { mode: 'cf-access', id: commonName!.toLowerCase(), kind: 'service' },
       ],
     };
   };

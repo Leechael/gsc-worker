@@ -10,7 +10,7 @@ import {
   pkceChallenge,
   randomToken,
 } from '../src/lib/google-oauth/crypto.js';
-import { GoogleTokenStore, KV_KEYS, OAUTH_STATE_TTL_SEC } from '../src/lib/google-oauth/store.js';
+import { GoogleTokenStore, KV_KEYS, OAUTH_STATE_TTL_SEC, StoredTokenUnreadableError } from '../src/lib/google-oauth/store.js';
 import { emailFromIdToken, scopesCover } from '../src/lib/google-oauth/google.js';
 import { TokenProvider, TokenRefreshError } from '../src/lib/auth.js';
 import { GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
@@ -131,6 +131,17 @@ function tokenEndpoint(response: { status?: number; body: unknown }) {
 }
 
 const google = { clientId: 'cid', clientSecret: 'sec', refreshToken: 'env-refresh', scopes: [GOOGLE_SCOPE_READONLY] };
+
+test('a stored record with the wrong shape is reported unreadable, not a TypeError', async () => {
+  const kv = new MemoryKv();
+  const store = new GoogleTokenStore(kv, KEY);
+  await store.save('rt', { scope: GOOGLE_SCOPE_READONLY, clientId: 'cid' });
+  const good = JSON.parse(kv.data.get(KV_KEYS.refreshToken)!) as Record<string, unknown>;
+  for (const bad of ['null', '"text"', JSON.stringify({ ...good, scope: undefined }), JSON.stringify({ ...good, stored_at: 5 }), JSON.stringify({ ...good, email: 7 })]) {
+    kv.data.set(KV_KEYS.refreshToken, bad);
+    await assert.rejects(() => store.loadMeta(), StoredTokenUnreadableError, bad);
+  }
+});
 
 test('precedence: KV-stored token wins over GOOGLE_REFRESH_TOKEN', async () => {
   const store = new GoogleTokenStore(new MemoryKv(), KEY);

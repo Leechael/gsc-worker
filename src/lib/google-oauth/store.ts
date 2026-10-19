@@ -95,8 +95,15 @@ export class GoogleTokenStore {
     } catch {
       throw new StoredTokenUnreadableError('record is not JSON');
     }
-    const rec = parsed as Partial<StoredTokenRecord>;
-    if (rec.v !== 1 || typeof rec.refresh_token !== 'string' || typeof rec.client_id !== 'string') {
+    const rec = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Partial<StoredTokenRecord>;
+    if (
+      rec.v !== 1 ||
+      typeof rec.refresh_token !== 'string' ||
+      typeof rec.scope !== 'string' ||
+      typeof rec.client_id !== 'string' ||
+      typeof rec.stored_at !== 'string' ||
+      (rec.email !== undefined && typeof rec.email !== 'string')
+    ) {
       throw new StoredTokenUnreadableError('unrecognized record format');
     }
     return rec as StoredTokenRecord;

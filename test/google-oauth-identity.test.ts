@@ -93,6 +93,14 @@ test('Access user: full start → callback flow binds state to the email', async
   assert.ok(kv.data.has(KV_KEYS.refreshToken));
 });
 
+test('the Access email is matched case-insensitively between start and callback', async () => {
+  const { call, kv } = setup();
+  const state = await start(call, await user('Ada@Example.com'));
+  const res = await call(`/auth/google/callback?code=c&state=${state}`, await user('ada@example.com'));
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.ok(kv.data.has(KV_KEYS.refreshToken));
+});
+
 test('Access user B cannot complete a flow started by user A, and does not consume it', async () => {
   const { call, kv, googleCalls } = setup();
   const state = await start(call, await user('ada@example.com'));

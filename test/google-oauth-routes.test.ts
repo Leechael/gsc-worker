@@ -157,10 +157,28 @@ test('start requests the full webmasters scope only when GSC_SCOPES=full', async
   assert.ok(!location.searchParams.get('scope')!.split(' ').includes(GOOGLE_SCOPE_READONLY));
 });
 
+const AUTH_HOST = 'auth.example.org';
+const PINNED_REDIRECT = `https://${AUTH_HOST}/auth/google/callback`;
+
 test('GOOGLE_REDIRECT_URI overrides the host-derived redirect', async () => {
-  const { call } = setup({ GOOGLE_REDIRECT_URI: `https://${HOST}/auth/google/callback` });
+  const { call } = setup({ MCP_ALLOWED_HOSTS: `${HOST},${AUTH_HOST}`, GOOGLE_REDIRECT_URI: PINNED_REDIRECT });
   const { location } = await startFlow(call);
-  assert.equal(location.searchParams.get('redirect_uri'), `https://${HOST}/auth/google/callback`);
+  assert.equal(location.searchParams.get('redirect_uri'), PINNED_REDIRECT);
+});
+
+test('with a pinned GOOGLE_REDIRECT_URI, the callback is only accepted on that host', async () => {
+  const { app, call, kv } = setup({ MCP_ALLOWED_HOSTS: `${HOST},${AUTH_HOST}`, GOOGLE_REDIRECT_URI: PINNED_REDIRECT });
+  const { state } = await startFlow(call);
+  const calls = mockGoogle({ token: () => Response.json({ refresh_token: 'r', scope: GOOGLE_SCOPE_READONLY }) });
+  const wrongHost = await call(`/auth/google/callback?code=c&state=${state}`);
+  assert.equal(wrongHost.status, 400);
+  assert.match(await wrongHost.text(), /invalid_redirect_uri/);
+  assert.equal(calls.length, 0, 'code must not be exchanged on the wrong host');
+  assert.equal(kv.data.has(KV_KEYS.refreshToken), false);
+  const res = await app.request(`https://${AUTH_HOST}/auth/google/callback?code=c&state=${state}`, {
+    headers: { host: AUTH_HOST, authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(res.status, 200, 'the refused attempt must not consume the state');
 });
 
 test('start without a Google client answers 503', async () => {
@@ -245,6 +263,41 @@ test('callback with a Google error consumes the state and stores nothing', async
   assert.equal(res.status, 400);
   assert.equal(kv.data.has(KV_KEYS.oauthState(state)), false);
   assert.equal(kv.data.has(KV_KEYS.refreshToken), false);
+});
+
+test('callback accepts a token response that omits scope (RFC 6749: same as requested)', async () => {
+  const { call, store } = setup();
+  const { state } = await startFlow(call);
+  mockGoogle({ token: () => Response.json({ refresh_token: 'r', access_token: 'at' }) });
+  const res = await call(`/auth/google/callback?code=c&state=${state}`);
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal((await store.loadMeta())?.scope, GOOGLE_SCOPE_READONLY);
+});
+
+test('callback answers 503 with a retry hint when KV cannot store the token', async () => {
+  const { call, kv } = setup();
+  const { state } = await startFlow(call);
+  const realPut = kv.put.bind(kv);
+  kv.put = async (key, value, options) => {
+    if (key === KV_KEYS.refreshToken) throw new Error('KV PUT failed: 429 Too Many Requests');
+    return realPut(key, value, options);
+  };
+  const calls = mockGoogle({ token: () => Response.json({ refresh_token: 'r', scope: GOOGLE_SCOPE_READONLY }) });
+  const originalError = console.error;
+  const logged: string[] = [];
+  console.error = (...args: unknown[]) => { logged.push(args.join(' ')); };
+  let res: Response;
+  try {
+    res = await call(`/auth/google/callback?code=c&state=${state}`);
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(res.status, 503);
+  const body = await res.json() as Record<string, string>;
+  assert.equal(body.error, 'storage_failed');
+  assert.match(body.error_description!, /\/auth\/google/);
+  assert.ok(logged.some((l) => l.includes('429')), 'cause is logged');
+  assert.ok(!calls.some((c) => c.url.endsWith('/revoke')), 'the grant is not revoked');
 });
 
 test('callback refuses a grant without the Search Console scope', async () => {
@@ -379,7 +432,7 @@ test('revoke refuses cross-site browser requests', async () => {
   const { call, store, kv } = setup();
   await store.save('1//stored', { scope: GOOGLE_SCOPE_READONLY, clientId: 'c' });
   const calls = mockGoogle({});
-  for (const headers of [{ origin: 'https://evil.example.net' }, { 'sec-fetch-site': 'cross-site' }]) {
+  for (const headers of [{ origin: 'https://evil.example.net' }, { origin: `http://${HOST}` }, { 'sec-fetch-site': 'cross-site' }]) {
     const res = await call('/auth/google/revoke', { method: 'POST', headers });
     assert.equal(res.status, 403, JSON.stringify(headers));
   }

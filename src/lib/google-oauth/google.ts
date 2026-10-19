@@ -47,7 +47,15 @@ export class GoogleOAuthError extends Error {
 
 export async function exchangeAuthorizationCode(
   fetchImpl: typeof fetch,
-  opts: { clientId: string; clientSecret: string; code: string; redirectUri: string; codeVerifier: string },
+  opts: {
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    redirectUri: string;
+    codeVerifier: string;
+    /** Recorded as the granted scope when Google omits `scope` (RFC 6749 §5.1: then it equals the request). */
+    requestedScopes: string[];
+  },
 ): Promise<CodeExchangeResult> {
   const body = new URLSearchParams({
     client_id: opts.clientId,
@@ -80,7 +88,7 @@ export async function exchangeAuthorizationCode(
   }
   return {
     refreshToken: data.refresh_token ?? null,
-    scope: data.scope ?? '',
+    scope: data.scope ?? opts.requestedScopes.join(' '),
     email: data.id_token ? emailFromIdToken(data.id_token) : null,
   };
 }

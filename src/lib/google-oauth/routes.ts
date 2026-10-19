@@ -131,6 +131,15 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     const unavailable = storageProblem(cfg, svc) ?? clientProblem(cfg);
     if (unavailable) return respond(c, 503, 'Authorization failed', { error: 'not_configured', error_description: unavailable });
 
+    const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
+    if (!redirect.ok || !callbackHostMatches(redirect.uri, c.req.header('host'))) {
+      return respond(c, 400, 'Authorization failed', {
+        error: 'invalid_redirect_uri',
+        error_description: redirect.ok
+          ? `The callback must arrive on ${new URL(redirect.uri).host} (GOOGLE_REDIRECT_URI).`
+          : redirect.error,
+      });
+    }
     const state = c.req.query('state');
     const taken = state ? await svc.tokenStore!.takeState(state, c.get('authPrincipal')) : { status: 'missing' as const };
     const googleError = c.req.query('error');
@@ -157,8 +166,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
     const record = taken.record;
-    const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
-    if (!redirect.ok || redirect.uri !== record.redirectUri) {
+    if (redirect.uri !== record.redirectUri) {
       return respond(c, 400, 'Authorization failed', {
         error: 'invalid_redirect_uri',
         error_description: 'The callback arrived on a different host than the one the authorization started from.',
@@ -173,6 +181,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         code,
         redirectUri: record.redirectUri,
         codeVerifier: record.codeVerifier,
+        requestedScopes: cfg.google.scopes,
       });
     } catch (e) {
       const message = e instanceof GoogleOAuthError ? e.message : 'Google token exchange failed.';
@@ -192,11 +201,23 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
 
-    const meta = await svc.tokenStore!.save(result.refreshToken, {
-      scope: result.scope,
-      clientId: cfg.google.clientId!,
-      ...(result.email ? { email: result.email } : {}),
-    });
+    let meta;
+    try {
+      meta = await svc.tokenStore!.save(result.refreshToken, {
+        scope: result.scope,
+        clientId: cfg.google.clientId!,
+        ...(result.email ? { email: result.email } : {}),
+      });
+    } catch (e) {
+      // The new refresh token is lost, but Google keeps the grant: a new
+      // consent reuses it. Do not revoke it, as that would also revoke the
+      // previously stored token for the same account and client.
+      console.error(`gsc-mcp-ts: storing the Google refresh token failed: ${e instanceof Error ? e.message : String(e)}`);
+      return respond(c, 503, 'Authorization failed', {
+        error: 'storage_failed',
+        error_description: `Google authorized the request, but the token could not be saved to KV. Open ${AUTH_BASE_PATH} to try again.`,
+      });
+    }
     svc.tokenProvider.reset();
     if (wantsHtml(c)) {
       // Post/redirect/get: a reload must not resubmit the used code, and the
@@ -338,17 +359,29 @@ function crossSiteProblem(c: Context): string | null {
   }
   const origin = c.req.header('origin');
   if (origin) {
-    let originHost: string | null = null;
+    let same = false;
     try {
-      originHost = new URL(origin).host;
+      // Scheme and port count: http://host is a different origin from https://host.
+      const expected = new URL(`${new URL(c.req.url).protocol}//${c.req.header('host') ?? ''}`).origin;
+      same = new URL(origin).origin === expected;
     } catch {
-      // fall through: unparseable Origin is refused
+      // unparseable Origin or Host is refused
     }
-    if (originHost === null || originHost.toLowerCase() !== (c.req.header('host') ?? '').toLowerCase()) {
-      return 'Cross-origin request refused.';
-    }
+    if (!same) return 'Cross-origin request refused.';
   }
   return null;
+}
+
+/**
+ * Google sends the browser to the redirect URI's host, so a callback served
+ * on any other host (possible when GOOGLE_REDIRECT_URI is pinned and several
+ * hosts are allowed) is refused. Loopback redirect URIs are exempt because
+ * wrangler dev rewrites the Host header to the route's hostname.
+ */
+function callbackHostMatches(redirectUri: string, hostHeader: string | undefined): boolean {
+  const expected = new URL(redirectUri);
+  if (isLoopbackHost(expected.hostname)) return true;
+  return (hostHeader ?? '').toLowerCase() === expected.host.toLowerCase();
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
