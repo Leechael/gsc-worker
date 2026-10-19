@@ -149,3 +149,50 @@ test('GSC client: a second 401 is reported, not retried forever', async () => {
   await assert.rejects(() => client.request('/webmasters/v3/sites'), (err: unknown) => err instanceof GscApiError && err.status === 401);
   assert.equal(calls, 2);
 });
+
+test('status() reports a stored token that no longer decrypts (key changed) as unavailable', async () => {
+  const kv = new MemoryKv();
+  await new GoogleTokenStore(kv, KEY).save('rt', meta);
+  const rotated = new GoogleTokenStore(kv, randomBytes(32).toString('base64'));
+  const provider = new TokenProvider(google, tokenEndpoint().fetchImpl, { store: rotated });
+  const status = await provider.status();
+  assert.equal(status.source, 'kv');
+  assert.equal(status.stored, null);
+  assert.match(status.error ?? '', /cannot be decrypted/);
+});
+
+test('status() flags a stored token issued to another OAuth client before any refresh', async () => {
+  const { a } = isolates();
+  await a.save('rt', { scope: GOOGLE_SCOPE_READONLY, clientId: 'old-client' });
+  const status = await new TokenProvider(google, tokenEndpoint().fetchImpl, { store: a }).status();
+  assert.equal(status.stored?.clientId, 'old-client');
+  assert.match(status.error ?? '', /different OAuth client/);
+});
+
+test('invalidating the cache while its KV check is in flight does not throw', async () => {
+  const kv = new MemoryKv();
+  let hold: Promise<void> | null = null;
+  class SlowStore extends GoogleTokenStore {
+    override async loadRefreshToken() {
+      if (hold) await hold;
+      return super.loadRefreshToken();
+    }
+  }
+  const store = new SlowStore(kv, KEY);
+  await store.save('rt', meta);
+  const c = clock();
+  let minted = 0;
+  const fetchImpl = (async () => Response.json({ access_token: `at${++minted}`, expires_in: 3600 })) as typeof fetch;
+  const provider = new TokenProvider(google, fetchImpl, { store, now: c.now });
+  assert.equal(await provider.getAccessToken(), 'at1');
+
+  let release!: () => void;
+  hold = new Promise<void>((r) => { release = r; });
+  c.advance(31_000);
+  const pending = provider.getAccessToken();
+  await tick();
+  provider.invalidateAccessToken();
+  hold = null;
+  release();
+  assert.equal(await pending, 'at2');
+});

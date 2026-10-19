@@ -125,7 +125,9 @@ export class TokenProvider {
     let meta: StoredTokenMeta | null = null;
     let error: string | null = null;
     try {
-      meta = (await this.store?.loadMeta()) ?? null;
+      // Decrypt, not just read metadata: a token that no longer decrypts
+      // (TOKEN_ENCRYPTION_KEY changed) must show up as unavailable.
+      meta = (await this.store?.loadRefreshToken())?.meta ?? null;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -154,21 +156,27 @@ export class TokenProvider {
     // An unreadable KV record still counts as the KV source: falling back to
     // env would silently use a different account than the one authorized.
     const source: TokenSource = stored || storeError ? 'kv' : this.google.refreshToken ? 'env' : 'none';
+    const clientMismatch = stored && this.google.clientId && stored.clientId !== this.google.clientId
+      ? STORED_TOKEN_CLIENT_MISMATCH_MESSAGE
+      : null;
     return {
       source,
       clientConfigured: this.clientConfigured,
       configured: this.clientConfigured && source !== 'none',
       stored,
-      error: storeError ?? this.lastError,
+      error: storeError ?? clientMismatch ?? this.lastError,
     };
   }
 
   async getAccessToken(): Promise<string> {
-    if (this.cached && this.cached.expiresAtMs > this.now()) {
-      if (this.cached.fingerprint === (await this.currentFingerprint())) {
-        return this.cached.accessToken;
+    const cached = this.cached;
+    if (cached && cached.expiresAtMs > this.now()) {
+      // reset() or invalidateAccessToken() may run while KV is awaited.
+      const fingerprint = await this.currentFingerprint();
+      if (this.cached === cached && cached.fingerprint === fingerprint) {
+        return cached.accessToken;
       }
-      this.cached = null;
+      if (this.cached === cached) this.cached = null;
     }
     // In-flight dedup: concurrent callers share one refresh.
     this.inflight ??= this.refresh()

@@ -51,7 +51,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       } else if (status.source === 'none') {
         authStatus = notAuthenticated;
       } else if (status.error) {
-        authStatus = `⚠️ Credentials configured, but the last token refresh failed:\n${status.error}`;
+        authStatus = `⚠️ Credentials configured, but the Google token cannot be used:\n${status.error}`;
       } else {
         authStatus = '✅ Credentials configured — ready to use all tools in the current scope tier.';
       }

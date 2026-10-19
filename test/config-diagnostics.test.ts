@@ -123,3 +123,9 @@ test('get_capabilities without any credentials says what is missing', async () =
   assert.match(text, /GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not both set/);
   assert.match(text, /Not authenticated/);
 });
+
+test('get_capabilities does not report ready when the stored grant belongs to another client', async () => {
+  const text = await capabilities({ GOOGLE_CLIENT_ID: 'new-client', GOOGLE_CLIENT_SECRET: 'sec' }, { scope: GOOGLE_SCOPE_READONLY });
+  assert.doesNotMatch(text, /✅/);
+  assert.match(text, /different OAuth client/);
+});
