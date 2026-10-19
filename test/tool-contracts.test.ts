@@ -367,6 +367,15 @@ test('a batch where every URL fails sets isError; a mixed batch does not', async
     urls: 'https://example.com/a\nhttps://example.com/b',
   }, {});
   assert.notEqual(partial.isError, true);
+  const partialBody = JSON.parse(partial.content[0]!.text) as {
+    results: { url?: string; error?: string; index_verdict?: string }[];
+  };
+  assert.equal(partialBody.results.length, 2);
+  assert.equal(partialBody.results[0]!.url, 'https://example.com/a');
+  assert.equal(partialBody.results[0]!.error, undefined);
+  assert.equal(partialBody.results[0]!.index_verdict, 'PASS');
+  assert.equal(partialBody.results[1]!.url, 'https://example.com/b');
+  assert.equal(typeof partialBody.results[1]!.error, 'string');
 });
 
 test('indexing request failures stay out of not_indexed and fail the call when every URL fails', async () => {
