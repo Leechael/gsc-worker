@@ -14,6 +14,8 @@ interface IndexStatusResult {
   googleCanonical?: string;
   userCanonical?: string;
   crawledAs?: string;
+  /** Sitemaps that contain this URL. The API field name is `sitemap`. */
+  sitemap?: string[];
   referringUrls?: string[];
 }
 
@@ -147,6 +149,7 @@ async function inspectSingleUrl(
       index_verdict: indexStatus.verdict ?? 'UNKNOWN',
       coverage_state: indexStatus.coverageState ?? 'Unknown',
       last_crawled: lastCrawl,
+      referring_sitemaps: indexStatus.sitemap ?? [],
       rich_results: richResultsSummary(inspection),
     };
   } catch (e) {
@@ -255,6 +258,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
           google_canonical: indexStatus.googleCanonical ?? null,
           user_canonical: indexStatus.userCanonical ?? null,
           crawled_as: indexStatus.crawledAs ?? null,
+          referring_sitemaps: indexStatus.sitemap ?? [],
           referring_urls: (indexStatus.referringUrls ?? []).slice(0, 5),
           rich_results: richResultsSummary(inspection),
         };
