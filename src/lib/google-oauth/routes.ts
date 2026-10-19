@@ -1,7 +1,7 @@
 import type { Context, Hono } from 'hono';
 import type { Config } from '../config.js';
 import { GOOGLE_CALLBACK_PATH, isLoopbackHost, TOKEN_KV_BINDING } from '../config.js';
-import type { AuthBuildResult } from '../mcp-auth/index.js';
+import type { AuthBuildResult, AuthIdentity } from '../mcp-auth/index.js';
 import type { ServerServices } from '../../mcp/context.js';
 import { pkceChallenge, randomToken } from './crypto.js';
 import {
@@ -89,13 +89,16 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     }
     const outcome = await gateResult.authenticate(c.req.raw);
     if (outcome.kind === 'deny') return outcome.response;
-    c.set('authPrincipal', outcome.authInfo.clientId);
+    c.set('authIdentities', outcome.identities);
+    c.set('authPrincipal', outcome.identities.map((i) => `${i.mode}:${i.id}`).join(','));
     await next();
   }
 
   app.get(AUTH_BASE_PATH, async (c) => {
     const cfg = deps.config();
     const svc = deps.services();
+    const denied = adminProblem(cfg, c.get('authIdentities'));
+    if (denied) return respond(c, 403, 'Not allowed', { error: 'forbidden', error_description: denied });
     const unavailable = storageProblem(cfg, svc) ?? clientProblem(cfg);
     if (unavailable) return respond(c, 503, 'Authorization unavailable', { error: 'not_configured', error_description: unavailable });
 
@@ -123,34 +126,37 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
   app.get(`${AUTH_BASE_PATH}/callback`, async (c) => {
     const cfg = deps.config();
     const svc = deps.services();
+    const denied = adminProblem(cfg, c.get('authIdentities'));
+    if (denied) return respond(c, 403, 'Not allowed', { error: 'forbidden', error_description: denied });
     const unavailable = storageProblem(cfg, svc) ?? clientProblem(cfg);
     if (unavailable) return respond(c, 503, 'Authorization failed', { error: 'not_configured', error_description: unavailable });
 
     const state = c.req.query('state');
-    const record = state ? await svc.tokenStore!.takeState(state) : null;
+    const taken = state ? await svc.tokenStore!.takeState(state, c.get('authPrincipal')) : { status: 'missing' as const };
     const googleError = c.req.query('error');
     if (googleError) {
       return respond(c, 400, 'Authorization was not completed', {
         error: 'access_denied',
-        error_description: `Google returned '${googleError}'. Open ${AUTH_BASE_PATH} to try again.`,
+        error_description: `Google returned '${oauthErrorCode(googleError)}'. Open ${AUTH_BASE_PATH} to try again.`,
       });
     }
     const code = c.req.query('code');
     if (!state || !code) {
       return respond(c, 400, 'Authorization failed', { error: 'invalid_request', error_description: 'Missing code or state parameter.' });
     }
-    if (!record) {
-      return respond(c, 400, 'Authorization failed', {
-        error: 'invalid_state',
-        error_description: `This authorization request is unknown, expired, or was already used. Open ${AUTH_BASE_PATH} to start again.`,
-      });
-    }
-    if (record.principal !== c.get('authPrincipal')) {
+    if (taken.status === 'mismatch') {
       return respond(c, 403, 'Authorization failed', {
         error: 'state_mismatch',
         error_description: 'This authorization was started by a different identity.',
       });
     }
+    if (taken.status === 'missing') {
+      return respond(c, 400, 'Authorization failed', {
+        error: 'invalid_state',
+        error_description: `This authorization request is unknown, expired, or was already used. Open ${AUTH_BASE_PATH} to start again.`,
+      });
+    }
+    const record = taken.record;
     const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
     if (!redirect.ok || redirect.uri !== record.redirectUri) {
       return respond(c, 400, 'Authorization failed', {
@@ -192,6 +198,14 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       ...(result.email ? { email: result.email } : {}),
     });
     svc.tokenProvider.reset();
+    if (wantsHtml(c)) {
+      // Post/redirect/get: a reload must not resubmit the used code, and the
+      // code-bearing URL should not stay the current history entry.
+      return new Response(null, {
+        status: 303,
+        headers: { Location: `${AUTH_BASE_PATH}/status?connected=1`, ...SECURITY_HEADERS },
+      });
+    }
     return respond(c, 200, 'Google Search Console connected', {
       ok: true,
       email: meta.email ?? null,
@@ -225,7 +239,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       required_scopes: cfg.google.scopes,
       redirect_uri: redirect.ok ? redirect.uri : null,
       last_error: status.error,
-    });
+    }, { disconnect: status.source === 'kv' });
   });
 
   app.post(`${AUTH_BASE_PATH}/revoke`, async (c) => {
@@ -233,6 +247,8 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     const svc = deps.services();
     const csrf = crossSiteProblem(c);
     if (csrf) return respond(c, 403, 'Disconnect refused', { error: 'forbidden', error_description: csrf });
+    const denied = adminProblem(cfg, c.get('authIdentities'));
+    if (denied) return respond(c, 403, 'Not allowed', { error: 'forbidden', error_description: denied });
     const unavailable = storageProblem(cfg, svc);
     if (unavailable) return respond(c, 503, 'Disconnect unavailable', { error: 'not_configured', error_description: unavailable });
 
@@ -253,13 +269,14 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
 
-    // Disconnect always deletes locally; when Google could not be reached the
-    // grant may stay live there, which the response says explicitly.
+    // Delete locally first: if KV fails, nothing was revoked and the stored
+    // token still works. If Google then cannot be reached, the grant may stay
+    // live there, which the response says explicitly.
+    await svc.tokenStore!.clear();
+    svc.tokenProvider.reset();
     const google = refreshToken
       ? await revokeGoogleToken(fetchImpl, refreshToken)
       : { revoked: false, alreadyInvalid: false, detail: readError };
-    await svc.tokenStore!.clear();
-    svc.tokenProvider.reset();
     const revokedAtGoogle = google.revoked || google.alreadyInvalid;
     return respond(c, 200, 'Google Search Console disconnected', {
       deleted: true,
@@ -273,6 +290,24 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       active_source: cfg.google.refreshToken ? 'env' : 'none',
     });
   });
+}
+
+/**
+ * Connecting or disconnecting Google changes which account every MCP client
+ * reads, so it is narrower than /mcp access: GOOGLE_AUTH_ADMINS when set,
+ * otherwise anyone authenticated except Access service tokens (which are
+ * issued to MCP clients, not to the operator).
+ */
+export function adminProblem(cfg: Config, identities: AuthIdentity[]): string | null {
+  const admins = cfg.googleAuth.admins.map((a) => a.toLowerCase());
+  if (admins.length > 0) {
+    if (identities.some((i) => admins.includes(i.id.toLowerCase()))) return null;
+    return 'Only identities listed in GOOGLE_AUTH_ADMINS may connect or disconnect Google.';
+  }
+  if (identities.some((i) => i.kind === 'service')) {
+    return 'Cloudflare Access service tokens may not connect or disconnect Google. Sign in as a user, or list the token in GOOGLE_AUTH_ADMINS.';
+  }
+  return null;
 }
 
 function storageProblem(cfg: Config, svc: ServerServices): string | null {
@@ -336,14 +371,25 @@ function wantsHtml(c: Context): boolean {
   return (c.req.header('accept') ?? '').includes('text/html');
 }
 
-function respond(c: Context, status: number, title: string, data: Record<string, unknown>): Response {
+/** Google's `error` callback parameter is a short ASCII code; anything else is not echoed. */
+function oauthErrorCode(raw: string): string {
+  return /^[a-z_]{1,64}$/.test(raw) ? raw : 'unknown_error';
+}
+
+function respond(
+  c: Context,
+  status: number,
+  title: string,
+  data: Record<string, unknown>,
+  opts: { disconnect?: boolean } = {},
+): Response {
   if (!wantsHtml(c)) {
     return new Response(JSON.stringify(data, null, 2), {
       status,
       headers: { ...SECURITY_HEADERS, 'Content-Type': 'application/json' },
     });
   }
-  return new Response(renderPage(title, data), { status, headers: HTML_HEADERS });
+  return new Response(renderPage(title, data, opts.disconnect ?? false), { status, headers: HTML_HEADERS });
 }
 
 function escapeHtml(value: string): string {
@@ -370,7 +416,7 @@ function renderTable(data: Record<string, unknown>): string {
   return `<table>${rows}</table>`;
 }
 
-function renderPage(title: string, data: Record<string, unknown>): string {
+function renderPage(title: string, data: Record<string, unknown>, disconnect: boolean): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -392,7 +438,7 @@ ${renderTable(data)}
 <nav>
 <a href="${AUTH_BASE_PATH}">Authorize Google</a>
 <a href="${AUTH_BASE_PATH}/status">Status</a>
-<form method="post" action="${AUTH_BASE_PATH}/revoke"><button type="submit">Disconnect</button></form>
+${disconnect ? `<form method="post" action="${AUTH_BASE_PATH}/revoke"><button type="submit">Disconnect</button></form>` : ''}
 </nav>
 </body>
 </html>

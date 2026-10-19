@@ -68,16 +68,25 @@ test('state is single use, encrypted at rest and stored with a TTL', async () =>
   const raw = kv.data.get(KV_KEYS.oauthState(state))!;
   assert.ok(!raw.includes('verifier-123'));
   assert.equal(kv.ttls.get(KV_KEYS.oauthState(state)), OAUTH_STATE_TTL_SEC);
-  assert.deepEqual(await store.takeState(state), record);
-  assert.equal(await store.takeState(state), null, 'second use must fail');
-  assert.equal(await store.takeState('unknown'), null);
+  assert.deepEqual(await store.takeState(state, 'ada@example.com'), { status: 'ok', record });
+  assert.deepEqual(await store.takeState(state, 'ada@example.com'), { status: 'missing' }, 'second use must fail');
+  assert.deepEqual(await store.takeState('unknown', 'ada@example.com'), { status: 'missing' });
 });
 
 test('expired state is rejected even if KV has not evicted it yet', async () => {
   const store = new GoogleTokenStore(new MemoryKv(), KEY);
   const createdAt = new Date(Date.now() - (OAUTH_STATE_TTL_SEC + 5) * 1000).toISOString();
   await store.putState('s1', { codeVerifier: 'v', principal: 'p', redirectUri: 'r', createdAt });
-  assert.equal(await store.takeState('s1'), null);
+  assert.deepEqual(await store.takeState('s1', 'p'), { status: 'missing' });
+});
+
+test('state presented by another identity is refused and left for its owner', async () => {
+  const kv = new MemoryKv();
+  const store = new GoogleTokenStore(kv, KEY);
+  await store.putState('s1', { codeVerifier: 'v', principal: 'owner', redirectUri: 'r', createdAt: new Date().toISOString() });
+  assert.deepEqual(await store.takeState('s1', 'intruder'), { status: 'mismatch' });
+  assert.ok(kv.data.has(KV_KEYS.oauthState('s1')));
+  assert.equal((await store.takeState('s1', 'owner')).status, 'ok');
 });
 
 test('a state blob cannot be replayed under a different state key', async () => {
@@ -85,7 +94,7 @@ test('a state blob cannot be replayed under a different state key', async () => 
   const store = new GoogleTokenStore(kv, KEY);
   await store.putState('s1', { codeVerifier: 'v', principal: 'p', redirectUri: 'r', createdAt: new Date().toISOString() });
   kv.data.set(KV_KEYS.oauthState('s2'), kv.data.get(KV_KEYS.oauthState('s1'))!);
-  assert.equal(await store.takeState('s2'), null);
+  assert.deepEqual(await store.takeState('s2', 'p'), { status: 'missing' });
 });
 
 // ---------- token store ----------

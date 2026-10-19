@@ -143,9 +143,11 @@ test('start redirects to Google with offline access, consent, scope, state and S
   assert.equal(p.get('code_challenge_method'), 'S256');
   assert.deepEqual(p.get('scope')!.split(' '), [GOOGLE_SCOPE_READONLY, 'openid', 'email']);
   assert.ok(kv.data.has(KV_KEYS.oauthState(state)));
-  const record = await store.takeState(state);
-  assert.equal(record?.principal, 'static-bearer');
-  assert.equal(p.get('code_challenge'), createHash('sha256').update(record!.codeVerifier).digest('base64url'));
+  const taken = await store.takeState(state, 'bearer:static-bearer');
+  assert.equal(taken.status, 'ok', 'state is bound to the bearer identity');
+  if (taken.status === 'ok') {
+    assert.equal(p.get('code_challenge'), createHash('sha256').update(taken.record.codeVerifier).digest('base64url'));
+  }
 });
 
 test('start requests the full webmasters scope only when GSC_SCOPES=full', async () => {
@@ -177,11 +179,14 @@ test('callback exchanges the code with the PKCE verifier and stores the token en
     token: () => Response.json({ refresh_token: '1//new-refresh', access_token: 'at', scope: `${GOOGLE_SCOPE_READONLY} openid`, id_token: idToken('ada@example.com') }),
   });
   const res = await call(`/auth/google/callback?code=auth-code&state=${state}`, { headers: { accept: 'text/html' } });
-  const html = await res.text();
-  assert.equal(res.status, 200, html);
-  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+  assert.equal(res.status, 303, await res.clone().text());
+  assert.equal(res.headers.get('location'), '/auth/google/status?connected=1');
   assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+  const page = await call('/auth/google/status?connected=1', { headers: { accept: 'text/html' } });
+  const html = await page.text();
+  assert.match(page.headers.get('content-type') ?? '', /text\/html/);
   assert.match(html, /ada@example\.com/);
+  assert.match(html, /Disconnect/);
   assert.ok(!html.includes('new-refresh'), 'token must never be shown');
 
   const exchange = calls[0]!;
@@ -267,14 +272,34 @@ test('callback surfaces token-exchange failures and a missing refresh token as 5
   assert.match(await res.text(), /no_refresh_token/);
 });
 
-test('HTML pages escape values echoed from the request', async () => {
+test('the Google error parameter is only echoed when it is a plain error code', async () => {
   const { call } = setup();
-  const { state } = await startFlow(call);
-  const res = await call(`/auth/google/callback?error=${encodeURIComponent('<script>x</script>')}&state=${state}`, { headers: { accept: 'text/html' } });
-  const html = await res.text();
-  assert.ok(!html.includes('<script>x'));
-  assert.match(html, /&lt;script&gt;/);
+  let { state } = await startFlow(call);
+  let res = await call(`/auth/google/callback?error=${encodeURIComponent('<script>x</script> call +1-555')}&state=${state}`, { headers: { accept: 'text/html' } });
+  let html = await res.text();
+  assert.ok(!html.includes('&lt;script') && !html.includes('<script') && !html.includes('555'));
+  assert.match(html, /unknown_error/);
   assert.match(res.headers.get('content-security-policy') ?? '', /default-src 'none'/);
+  ({ state } = await startFlow(call));
+  res = await call(`/auth/google/callback?error=access_denied&state=${state}`);
+  assert.match(await res.text(), /'access_denied'/);
+});
+
+test('HTML pages escape stored values (account email from the ID token)', async () => {
+  const { call, store } = setup();
+  await store.save('1//r', { scope: GOOGLE_SCOPE_READONLY, clientId: 'c', email: '<img src=x onerror=alert(1)>@x' });
+  const html = await (await call('/auth/google/status', { headers: { accept: 'text/html' } })).text();
+  assert.ok(!html.includes('<img'));
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;@x/);
+});
+
+test('Disconnect is offered only on the status page, and only when a token is stored', async () => {
+  const { call, store } = setup();
+  const html = (path: string) => call(path, { headers: { accept: 'text/html' } }).then((r) => r.text());
+  assert.doesNotMatch(await html('/auth/google/status'), /Disconnect/);
+  await store.save('1//r', { scope: GOOGLE_SCOPE_READONLY, clientId: 'c' });
+  assert.match(await html('/auth/google/status'), /Disconnect/);
+  assert.doesNotMatch(await html('/auth/google/callback?code=c&state=nope'), /Disconnect/);
 });
 
 // ---------- status ----------
@@ -301,6 +326,25 @@ test('revoke calls Google with the stored token, deletes it and falls back to en
   assert.equal(calls[0]?.url, 'https://oauth2.googleapis.com/revoke');
   assert.equal(calls[0]?.body.get('token'), '1//stored');
   assert.equal(kv.data.has(KV_KEYS.refreshToken), false);
+});
+
+test('revoke deletes locally before calling Google; a KV failure revokes nothing', async () => {
+  const { call, store, kv } = setup();
+  await store.save('1//stored', { scope: GOOGLE_SCOPE_READONLY, clientId: 'c' });
+  const order: string[] = [];
+  const realDelete = kv.delete.bind(kv);
+  kv.delete = async (key: string) => { order.push(`kv.delete ${key}`); return realDelete(key); };
+  globalThis.fetch = (async (input: string | URL | Request) => { order.push(`fetch ${String(input)}`); return new Response('{}'); }) as typeof fetch;
+  assert.equal((await call('/auth/google/revoke', { method: 'POST' })).status, 200);
+  assert.deepEqual(order, [`kv.delete ${KV_KEYS.refreshToken}`, 'fetch https://oauth2.googleapis.com/revoke']);
+
+  await store.save('1//again', { scope: GOOGLE_SCOPE_READONLY, clientId: 'c' });
+  order.length = 0;
+  kv.delete = async () => { throw new Error('KV unavailable'); };
+  const res = await call('/auth/google/revoke', { method: 'POST' });
+  assert.equal(res.status, 500);
+  assert.equal(order.length, 0, 'Google must not be called when the local delete failed');
+  assert.ok(kv.data.has(KV_KEYS.refreshToken));
 });
 
 test('revoke still deletes locally when Google cannot be reached, with a warning', async () => {

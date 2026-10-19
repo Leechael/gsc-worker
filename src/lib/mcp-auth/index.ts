@@ -4,9 +4,9 @@ import { validateHttpWarnings } from '../config.js';
 import { buildBearerAuthenticator } from './bearer.js';
 import { buildCfAccessAuthenticator } from './cf-access.js';
 import { buildNoneAuthenticator } from './none.js';
-import type { AuthOutcome, Authenticator } from './types.js';
+import type { AuthIdentity, AuthOutcome, Authenticator } from './types.js';
 
-export type { AuthOutcome, Authenticator } from './types.js';
+export type { AuthIdentity, AuthOutcome, Authenticator } from './types.js';
 
 export type AuthBuildResult =
   | { ok: true; authenticate: Authenticator }
@@ -71,13 +71,16 @@ function buildUncached(cfg: Config, startupErrors: string[]): AuthBuildResult {
     ok: true,
     authenticate: async (req: Request): Promise<AuthOutcome> => {
       let authInfo: AuthInfo | null = null;
+      const identities: AuthIdentity[] = [];
       for (const check of checks) {
         const outcome = await check(req);
         if (outcome.kind === 'deny') return outcome;
         authInfo = outcome.authInfo;
+        identities.push(...outcome.identities);
       }
       return {
         kind: 'ok',
+        identities,
         authInfo: authInfo ?? {
           token: 'none',
           clientId: 'unknown',

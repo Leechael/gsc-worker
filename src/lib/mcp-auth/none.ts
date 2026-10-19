@@ -13,5 +13,6 @@ export function buildNoneAuthenticator(): () => Promise<AuthOutcome> {
       scopes: [],
       expiresAt: Math.floor(Date.now() / 1000) + 300,
     },
+    identities: [{ mode: 'none' as const, id: 'loopback', kind: 'static' as const }],
   });
 }

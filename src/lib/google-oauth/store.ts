@@ -51,6 +51,11 @@ export interface OAuthStateRecord {
   createdAt: string;
 }
 
+export type TakeStateResult =
+  | { status: 'ok'; record: OAuthStateRecord }
+  | { status: 'missing' }
+  | { status: 'mismatch' };
+
 export class StoredTokenUnreadableError extends Error {
   constructor(detail: string) {
     super(
@@ -138,23 +143,35 @@ export class GoogleTokenStore {
   }
 
   /**
-   * Fetch and delete a pending state (single use). Returns null when unknown,
-   * expired, already used, or unreadable. KV TTL is enforced lazily, so the
-   * creation time is checked too.
+   * Consume a pending state (single use) on behalf of `principal`.
+   *
+   * - `missing`: unknown, expired, already used, or unreadable. KV evicts
+   *   expired keys lazily, so the creation time is checked too.
+   * - `mismatch`: started by another identity. The record is left in place so
+   *   a different authenticated user cannot burn someone else's flow.
+   *
+   * KV has no compare-and-delete: two concurrent callbacks can both read the
+   * record, but Google accepts an authorization code only once.
    */
-  async takeState(state: string): Promise<OAuthStateRecord | null> {
+  async takeState(state: string, principal: string): Promise<TakeStateResult> {
     const key = KV_KEYS.oauthState(state);
     const blob = await this.kv.get(key);
-    if (blob === null) return null;
-    await this.kv.delete(key);
+    if (blob === null) return { status: 'missing' };
+    let rec: OAuthStateRecord;
     try {
-      const rec = JSON.parse(await decryptString(await this.key(), blob, stateAad(state))) as OAuthStateRecord;
-      const ageMs = Date.now() - Date.parse(rec.createdAt);
-      if (!(ageMs >= 0 && ageMs <= OAUTH_STATE_TTL_SEC * 1000)) return null;
-      return rec;
+      rec = JSON.parse(await decryptString(await this.key(), blob, stateAad(state))) as OAuthStateRecord;
     } catch {
-      return null;
+      await this.kv.delete(key);
+      return { status: 'missing' };
     }
+    const ageMs = Date.now() - Date.parse(rec.createdAt);
+    if (!(ageMs >= 0 && ageMs <= OAUTH_STATE_TTL_SEC * 1000)) {
+      await this.kv.delete(key);
+      return { status: 'missing' };
+    }
+    if (rec.principal !== principal) return { status: 'mismatch' };
+    await this.kv.delete(key);
+    return { status: 'ok', record: rec };
   }
 }
 

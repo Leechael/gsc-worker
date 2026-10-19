@@ -55,6 +55,12 @@ export interface GoogleAuthStorageConfig {
   encryptionKey?: string;
   /** GOOGLE_REDIRECT_URI: overrides the redirect URI derived from the request host. */
   redirectUri?: string;
+  /**
+   * GOOGLE_AUTH_ADMINS: identities (Access emails, service-token common
+   * names, or `static-bearer`) allowed to connect/disconnect Google. Empty
+   * means any authenticated identity except Access service tokens.
+   */
+  admins: string[];
 }
 
 export interface Config {
@@ -162,7 +168,7 @@ export function parseConfig(): Config {
   if (clientSecret) google.clientSecret = clientSecret;
   if (refreshToken) google.refreshToken = refreshToken;
 
-  const googleAuth: GoogleAuthStorageConfig = {};
+  const googleAuth: GoogleAuthStorageConfig = { admins: envList('GOOGLE_AUTH_ADMINS') };
   const kv = currentSource[TOKEN_KV_BINDING];
   if (isKvNamespace(kv)) googleAuth.kv = kv;
   const encryptionKey = env('TOKEN_ENCRYPTION_KEY');

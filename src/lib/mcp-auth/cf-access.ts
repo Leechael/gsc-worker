@@ -103,6 +103,11 @@ export function buildCfAccessAuthenticator(
         scopes: [],
         expiresAt: exp,
       },
+      identities: [
+        email
+          ? { mode: 'cf-access', id: email, kind: 'user' }
+          : { mode: 'cf-access', id: commonName!, kind: 'service' },
+      ],
     };
   };
 }
