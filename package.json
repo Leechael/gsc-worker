@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "auth": "tsx scripts/auth.ts",
-    "deploy": "npm run typecheck && npm test && wrangler deploy",
+    "deploy": "npm run check:wrangler && npm run typecheck && npm test && wrangler deploy",
+    "check:wrangler": "tsx scripts/check-wrangler-config.ts",
     "deploy:dry-run": "wrangler deploy --dry-run",
     "discovery-check": "tsx scripts/discovery-check.ts"
   },
