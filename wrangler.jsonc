@@ -34,7 +34,7 @@
     "MCP_AUTH_MODE": "cf-access",
     // REPLACE_ME: same hostname as in "routes" (comma-separate several).
     "MCP_ALLOWED_HOSTS": "gsc-mcp.example.com",
-    // REPLACE_ME: Zero Trust → Settings → Custom pages → Team domain.
+    // REPLACE_ME: <team> is the team name shown under Zero Trust → Settings.
     "CF_ACCESS_TEAM_DOMAIN": "https://REPLACE_ME.cloudflareaccess.com",
     // REPLACE_ME: Access application → Overview → Application Audience (AUD) Tag.
     "CF_ACCESS_AUD": "REPLACE_ME_ACCESS_AUD_TAG",
@@ -45,6 +45,7 @@
     // "GSC_DATA_STATE": "all",
     // "CF_ACCESS_ALLOWED_EMAILS": "you@example.com",
     // "CF_ACCESS_ALLOWED_SERVICE_TOKENS": "ci-bot",
+    // "GOOGLE_AUTH_ADMINS": "you@example.com",  // who may connect/disconnect Google
     // "GOOGLE_REDIRECT_URI": "https://gsc-mcp.example.com/auth/google/callback"
   }
 
