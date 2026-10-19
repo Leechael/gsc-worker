@@ -38,13 +38,16 @@ export function jsonError(value: unknown): { isError: true; content: { type: 'te
 export function tierGateMessage(tier: ScopeTier, tool: string, required: 'write' | 'destructive'): string | null {
   const order: ScopeTier[] = ['read', 'write', 'destructive'];
   if (order.indexOf(tier) >= order.indexOf(required)) return null;
+  const workerHint =
+    '  (Cloudflare Workers with the GSC_TOKENS KV binding: after step 2, open /auth/google on the deployment instead of steps 1 and 3.)';
   if (required === 'destructive') {
     return (
       `Safety: ${tool} modifies your GSC account and is disabled at the current scope tier (${tier}).\n` +
       'To enable it:\n' +
       '  1. Re-authorize with full scope: npm run auth -- --scopes full\n' +
       '  2. Set GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true in the server environment\n' +
-      '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.'
+      '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.\n' +
+      workerHint
     );
   }
   return (
@@ -52,7 +55,8 @@ export function tierGateMessage(tier: ScopeTier, tool: string, required: 'write'
     'To enable it:\n' +
     '  1. Re-authorize: npm run auth -- --scopes full\n' +
     '  2. Set GSC_SCOPES=full in the server environment\n' +
-    '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.'
+    '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.\n' +
+    workerHint
   );
 }
 
