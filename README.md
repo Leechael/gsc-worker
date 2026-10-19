@@ -81,7 +81,7 @@ In Zero Trust, go to **Access → Applications → Add an application → Self-h
 
 Because the application covers the whole hostname, Access also sits in front of `/health`: an unauthenticated monitor gets the Access login redirect, not the Worker's JSON. Add a separate Access application for the path `/health` with a **Bypass** policy if you need public health checks.
 
-The Worker verifies the `Cf-Access-Jwt-Assertion` header on every request: signature against the team JWKS, issuer, audience, and expiry. User tokens map to the email and service tokens to their common name. `CF_ACCESS_ALLOWED_EMAILS` and `CF_ACCESS_ALLOWED_SERVICE_TOKENS` can narrow the Access policy further on the server side.
+On `/mcp` and every `/auth/*` route, the Worker verifies the `Cf-Access-Jwt-Assertion` header (`/health` is not checked): signature against the team JWKS, issuer, audience, and expiry. User tokens map to the email and service tokens to their common name. `CF_ACCESS_ALLOWED_EMAILS` and `CF_ACCESS_ALLOWED_SERVICE_TOKENS` can narrow the Access policy further on the server side.
 
 Bearer mode (`MCP_AUTH_MODE=bearer` plus the secret `MCP_AUTH_TOKEN`, at least 32 bytes) works without Access. The modes can be combined (`cf-access,bearer`), and then both must pass. `none` is refused on Workers.
 
@@ -124,7 +124,7 @@ Ciphertexts use a fresh 96-bit IV and are bound to their key name with AES-GCM a
 
 **Re-authorizing.** Open `/auth/google` again. The new token replaces the stored one. When Google answers `invalid_grant` (token revoked, expired, or unused for 6 months), tool errors say to re-open `/auth/google`. After changing `GSC_SCOPES`, re-authorize so the stored grant covers the new scope; the status page shows `covers_required_scope`.
 
-**Redirect URI.** By default it is `https://<request host>/auth/google/callback`, and the host must be listed in `MCP_ALLOWED_HOSTS`. Set `GOOGLE_REDIRECT_URI` to pin it explicitly. Either way it must exactly match an authorized redirect URI on the Google client.
+**Redirect URI.** By default it is `https://<request host>/auth/google/callback`, and the host must be listed in `MCP_ALLOWED_HOSTS`. Set `GOOGLE_REDIRECT_URI` to pin it explicitly; the callback is then only accepted on that URI's host. Either way it must exactly match an authorized redirect URI on the Google client.
 
 **Bearer-only deployments.** A browser cannot attach a bearer header, so authorize with `curl`:
 

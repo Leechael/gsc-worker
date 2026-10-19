@@ -19,6 +19,7 @@ import { TokenProvider } from '../src/lib/auth.js';
 import { GscClient } from '../src/lib/gsc-client.js';
 import { GoogleTokenStore } from '../src/lib/google-oauth/store.js';
 import { registerCapabilitiesTools } from '../src/tools/capabilities.js';
+import { registerAuthInfoTools } from '../src/tools/auth-info.js';
 import { MemoryKv } from './helpers/memory-kv.js';
 
 const HOST = 'gsc.example.com';
@@ -128,4 +129,21 @@ test('get_capabilities does not report ready when the stored grant belongs to an
   const text = await capabilities({ GOOGLE_CLIENT_ID: 'new-client', GOOGLE_CLIENT_SECRET: 'sec' }, { scope: GOOGLE_SCOPE_READONLY });
   assert.doesNotMatch(text, /✅/);
   assert.match(text, /different OAuth client/);
+});
+
+async function reauthenticateText(env: Record<string, unknown>): Promise<string> {
+  setEnvSource(env);
+  const config = parseConfig();
+  const tokenProvider = new TokenProvider(config.google);
+  const server = new McpServer({ name: 't', version: '0' });
+  registerAuthInfoTools(server, { config, tokenProvider, gsc: new GscClient({ tokenProvider }) });
+  const tools = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools;
+  return (await tools.reauthenticate!.executor({}, {})).content[0]!.text;
+}
+
+test('reauthenticate says who may open /auth/google', async () => {
+  assert.match(await reauthenticateText({}), /Access user or the MCP_AUTH_TOKEN holder \(Access service tokens are refused\)/);
+  const withAdmins = await reauthenticateText({ GOOGLE_AUTH_ADMINS: 'ops@example.com' });
+  assert.match(withAdmins, /listed in GOOGLE_AUTH_ADMINS/);
+  assert.doesNotMatch(withAdmins, /ops@example\.com/, 'admin identities are not disclosed to MCP clients');
 });

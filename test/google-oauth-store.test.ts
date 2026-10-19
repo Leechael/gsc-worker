@@ -278,3 +278,10 @@ test('config: a non-KV GSC_TOKENS value is ignored', () => {
   const cfg = workerConfig({ GSC_TOKENS: 'just-a-string' });
   assert.equal(cfg.googleAuth.kv, undefined);
 });
+
+test('MemoryKv: a write without expirationTtl clears the previous TTL, like Workers KV', async () => {
+  const kv = new MemoryKv();
+  await kv.put('k', 'a', { expirationTtl: 600 });
+  await kv.put('k', 'b');
+  assert.equal(kv.ttls.has('k'), false);
+});

@@ -11,7 +11,9 @@ export class MemoryKv implements KvNamespaceLike {
 
   async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
     this.data.set(key, value);
+    // Like Workers KV, a write without an expiration clears the previous one.
     if (options?.expirationTtl !== undefined) this.ttls.set(key, options.expirationTtl);
+    else this.ttls.delete(key);
   }
 
   async delete(key: string): Promise<void> {
