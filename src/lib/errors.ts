@@ -20,6 +20,10 @@ export const STORED_REFRESH_TOKEN_INVALID_MESSAGE =
   'Fix: open https://<this-worker-host>/auth/google in a browser and authorize again; the new token replaces the stored one.\n' +
   REFRESH_TOKEN_LIFETIME_NOTE;
 
+export const STORED_TOKEN_CLIENT_MISMATCH_MESSAGE =
+  'The Google token stored in KV was issued to a different OAuth client than the current GOOGLE_CLIENT_ID, so Google would reject it.\n' +
+  'Fix: open https://<this-worker-host>/auth/google and authorize again with the current client.';
+
 /** invalid_grant for GOOGLE_REFRESH_TOKEN from the environment. */
 export const REFRESH_TOKEN_INVALID_MESSAGE =
   'Google refresh token is invalid, expired, or revoked (invalid_grant).\n' +

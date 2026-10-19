@@ -217,7 +217,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
   app.get(`${AUTH_BASE_PATH}/status`, async (c) => {
     const cfg = deps.config();
     const svc = deps.services();
-    const status = await svc.tokenProvider.status();
+    const status = await svc.tokenProvider.status({ fresh: true });
     const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
     return respond(c, 200, 'Google authorization status', {
       active_source: status.source,
