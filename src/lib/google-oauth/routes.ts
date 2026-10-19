@@ -383,7 +383,7 @@ body{font-family:system-ui,sans-serif;max-width:44rem;margin:3rem auto;padding:0
 table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;vertical-align:top;padding:.35rem .5rem;border-bottom:1px solid #d0d7de}
 th{width:14rem;font-weight:600;text-transform:capitalize}td table{margin:0}
 nav{display:flex;gap:1rem;align-items:center;margin-top:1.5rem}
-a,button{font:inherit}button{padding:.35rem .9rem;cursor:pointer}
+a,button{font:inherit}button{padding:.35rem .9rem}
 </style>
 </head>
 <body>
