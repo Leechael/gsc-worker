@@ -1,13 +1,11 @@
 /**
- * Regression coverage for open upstream mcp-gsc issues that also apply here:
- * https://github.com/AminForou/mcp-gsc/pulls
- *
- * - #58 optional arguments must accept an explicit JSON null
- * - #53 failures set isError instead of looking like successful data
- * - #42 compare_search_periods deltas are Period 1 relative to Period 2
- * - #54 / #55 sort is client-side; the query body never sends orderBy
- * - #31 batch inspection overlaps instead of running one URL at a time
- * - #56 token refresh does not request a wider scope (readonly grants keep working)
+ * Tool contract regressions:
+ * - optional arguments accept an explicit JSON null
+ * - failures set isError; empty data does not
+ * - compare_search_periods deltas are period 1 relative to period 2
+ * - sort is client-side and the query body never sends orderBy
+ * - batch inspection overlaps instead of running one URL at a time
+ * - token refresh does not send a scope parameter
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -76,7 +74,7 @@ function schemaAllowsNull(prop: { type?: string | string[]; anyOf?: { type?: str
   });
 }
 
-// ---------- #58: explicit null on optional arguments ----------
+// ---------- explicit null on optional arguments ----------
 
 const NULLABLE_FIELDS: Record<string, string[]> = {
   get_advanced_search_analytics: [
@@ -144,7 +142,7 @@ test('list_sitemaps_enhanced drops a null sitemap_index query param', async () =
   assert.equal(url.searchParams.has('sitemapIndex'), false);
 });
 
-// ---------- #53: failures set isError; empty data does not ----------
+// ---------- failures set isError; empty data does not ----------
 
 test('API failures set isError and keep the message', async () => {
   const tokenProvider = new TokenProvider(
@@ -201,7 +199,7 @@ test('a scope-tier refusal is an error result', async () => {
   assert.match(result.content[0]!.text, /disabled at the current scope tier/);
 });
 
-// ---------- #42: period deltas ----------
+// ---------- period deltas ----------
 
 function comparisonRow(
   rows: { start: string; clicks: number; impressions: number; ctr: number; position: number }[],
@@ -270,7 +268,7 @@ test('compare_search_periods: a zero Period 2 baseline yields null percentages',
   assert.equal(row.imp_pct, null);
 });
 
-// ---------- #54 / #55: client-side sort, no orderBy ----------
+// ---------- client-side sort, no orderBy ----------
 
 test('get_search_by_page_query does not send orderBy', async () => {
   const { svc, calls } = harness(() => ({
@@ -319,7 +317,7 @@ test('non-click sort reorders the returned page and warns it is not global', asy
   assert.equal(nativeBody.sort_note, undefined);
 });
 
-// ---------- #31: batch inspection overlaps ----------
+// ---------- batch inspection overlaps ----------
 
 test('batch_url_inspection and check_indexing_issues overlap requests', async () => {
   let inFlight = 0;
@@ -369,7 +367,7 @@ test('batch_url_inspection and check_indexing_issues overlap requests', async ()
   assert.ok(maxInFlight >= 2, `indexing check overlapped (max in flight ${maxInFlight})`);
 });
 
-// ---------- #56: refresh must not widen the granted scope ----------
+// ---------- refresh must not send a scope ----------
 
 test('token refresh omits scope and does not treat invalid_scope as invalid_grant', async () => {
   let posted = '';

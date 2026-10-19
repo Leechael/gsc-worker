@@ -127,8 +127,8 @@ function sortRows(rows: Record<string, unknown>[], sortBy: SortMetric, sortDirec
 }
 
 /**
- * The API has no orderBy and always ranks by clicks descending (#54). A
- * different sort only reorders the rows already returned, so say so.
+ * The API has no orderBy and always ranks by clicks descending. A different
+ * sort only reorders the rows already returned, so say so.
  */
 function sortLimitationNote(sortBy: SortMetric, sortDirection: string): string | null {
   if (sortBy === 'clicks' && sortDirection.toLowerCase() !== 'ascending') return null;
@@ -231,8 +231,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
         ),
-        // `.nullish()` so an explicit JSON null is "not given" (upstream #58).
-        // `.optional()` advertises a string and rejects null before the tool runs.
+        // Explicit JSON null means omitted. `.optional()` rejects null.
         start_date: z.string().nullish()
           .describe('Start date in YYYY-MM-DD format (defaults to 28 days ago, Pacific Time).'),
         end_date: z.string().nullish()
@@ -354,7 +353,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         // Filters: multi-filter JSON array takes priority over the single-filter triple.
         let activeFilters: ActiveFilter[] = [];
         let filterGroups: { groupType: string; filters: ActiveFilter[] }[] | undefined;
-        // null is omitted (upstream #58); only a non-empty string is a filter.
+        // null means omitted; only a non-empty string is a filter.
         if (filters != null && filters.trim() !== '') {
           let parsed: unknown;
           try {

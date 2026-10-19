@@ -57,7 +57,7 @@ export class GscClient {
     const { method = 'GET', query, body } = options;
     const url = new URL(`${GSC_BASE_URL}${path}`);
     for (const [k, v] of Object.entries(query ?? {})) {
-      // null is "not given" — the same as omitting the argument (upstream #58).
+      // null means the argument was omitted.
       if (v != null) url.searchParams.set(k, v);
     }
 

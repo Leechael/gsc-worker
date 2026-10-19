@@ -9,8 +9,8 @@ export function textResult(text: string): { content: { type: 'text'; text: strin
 
 /**
  * Failure result. The message is unchanged; `isError` is set so a client can
- * tell a fault from data (upstream mcp-gsc #53). Raising would let the SDK
- * prefix the text with "Error executing tool …".
+ * tell a fault from data. Raising would let the SDK prefix the text with
+ * "Error executing tool …".
  */
 export function errorResult(text: string): { isError: true; content: { type: 'text'; text: string }[] } {
   return { isError: true, content: [{ type: 'text', text }] };
