@@ -131,6 +131,30 @@ test('get_capabilities does not report ready when the stored grant belongs to an
   assert.match(text, /different OAuth client/);
 });
 
+test('get_capabilities at the read tier hints at both write and destructive tools', async () => {
+  const text = await capabilities({ ...CLIENT });
+  assert.match(text, /Not enabled at the current tier:/);
+  assert.match(text, /write tools: set GSC_SCOPES=full/);
+  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): additionally set GSC_ALLOW_DESTRUCTIVE=true/);
+  assert.doesNotMatch(text, /Write \(scope tier write\):/);
+});
+
+test('get_capabilities at the write tier lists write tools and hints only at destructive tools', async () => {
+  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full' });
+  assert.match(text, /Write \(scope tier write\):\n  - submit_sitemap/);
+  assert.match(text, /Not enabled at the current tier:/);
+  assert.doesNotMatch(text, /write tools: set GSC_SCOPES=full/);
+  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): set GSC_ALLOW_DESTRUCTIVE=true/);
+  assert.doesNotMatch(text, /Destructive \(GSC_ALLOW_DESTRUCTIVE=true\):/);
+});
+
+test('get_capabilities at the destructive tier has no not-enabled hints', async () => {
+  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' });
+  assert.match(text, /Write \(scope tier write\):/);
+  assert.match(text, /Destructive \(GSC_ALLOW_DESTRUCTIVE=true\):\n  - add_site/);
+  assert.doesNotMatch(text, /Not enabled at the current tier/);
+});
+
 async function reauthenticateText(env: Record<string, unknown>): Promise<string> {
   setEnvSource(env);
   const config = parseConfig();

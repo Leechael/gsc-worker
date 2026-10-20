@@ -81,7 +81,16 @@ export interface Config {
   allowedHosts?: string[];
   /** MCP_ALLOWED_ORIGINS (optional). */
   allowedOrigins?: string[];
+  /**
+   * String settings for the optional search engines in src/engines/, keyed by
+   * env name. Only names starting with one of ENGINE_ENV_PREFIXES are kept;
+   * each engine parses its own entries.
+   */
+  engineEnv: Readonly<Record<string, string>>;
 }
+
+/** Env name prefixes owned by src/engines/* (add one per new engine). */
+export const ENGINE_ENV_PREFIXES = ['BING_', 'INDEXNOW_', 'YANDEX_', 'SEZNAM_'] as const;
 
 type EnvSource = Record<string, unknown>;
 
@@ -186,12 +195,22 @@ export function parseConfig(): Config {
     auth,
     host: env('MCP_HOST') ?? '127.0.0.1',
     port: Number.parseInt(env('MCP_PORT') ?? env('PORT') ?? '3001', 10),
+    engineEnv: engineEnvFrom(currentSource),
   };
   const allowedHosts = envList('MCP_ALLOWED_HOSTS');
   if (allowedHosts.length > 0) cfg.allowedHosts = allowedHosts;
   const allowedOrigins = envList('MCP_ALLOWED_ORIGINS');
   if (allowedOrigins.length > 0) cfg.allowedOrigins = allowedOrigins;
   return cfg;
+}
+
+function engineEnvFrom(src: EnvSource): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(src)) {
+    if (typeof value !== 'string' || value.trim() === '') continue;
+    if (ENGINE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) out[key] = value.trim();
+  }
+  return out;
 }
 
 export function getConfig(): Config {

@@ -20,6 +20,7 @@ Search Console access uses a Google OAuth refresh token for a single Google acco
 - [Client configuration](#client-configuration)
 - [Environment variables](#environment-variables)
 - [Tools and scope tiers](#tools-and-scope-tiers)
+- [Other search engines](#other-search-engines)
 - [Development](#development)
 
 ## Deploy to Cloudflare Workers
@@ -232,6 +233,13 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `GSC_ALLOW_DESTRUCTIVE` | all | var | `false` | With `GSC_SCOPES=full`, enables add/delete tools |
 | `GSC_DATA_STATE` | all | var | `all` | `all` (matches the GSC UI) or `final` |
 | `GSC_SKIP_OAUTH` | all | var | | Accepted for compatibility with mcp-gsc and ignored (no service accounts) |
+| `BING_API_KEY` | all | secret | | Bing Webmaster Tools API key; enables the `bing_*` tools ([details](#bing-webmaster-tools)) |
+| `INDEXNOW_KEY` | all | secret | | IndexNow key; enables the `indexnow_*` tools ([details](#indexnow)) |
+| `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
+| `INDEXNOW_HOSTS` | all | var | | Hosts whose key file `indexnow_check_key_file` may fetch, comma-separated (e.g. `example.com,www.example.com`); the host of an absolute `INDEXNOW_KEY_LOCATION` is always allowed |
+| `YANDEX_OAUTH_TOKEN` | all | secret | | Yandex OAuth token; enables the `yandex_*` tools ([details](#yandex-webmaster)) |
+| `SEZNAM_API_KEYS` | all | secret | | JSON object mapping each site to its Seznam API key; enables the `seznam_*` tools ([details](#seznam-webmaster)) |
+| `SEZNAM_API_KEY` | all | secret | | A single Seznam API key (one site, or the fallback when no `SEZNAM_API_KEYS` entry matches) |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -248,6 +256,115 @@ All 21 tools are always registered. Tools above the current tier return upgrade 
 | destructive | `GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
 
 Start with `get_capabilities`: it reports the tier, auth status, token source, and the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API).
+
+## Other search engines
+
+Engines other than Google are opt-in. Their tools are registered only when the engine's secret is set, and they use the same scope tiers as the Google tools: read tools always run, submit tools need `GSC_SCOPES=full`, and remove tools also need `GSC_ALLOW_DESTRUCTIVE=true`. Note that `GSC_SCOPES=full` also switches the Google grant to the full `webmasters` scope, so re-authorize Google after changing it. `get_capabilities` lists each engine as enabled or not configured, without showing secret values.
+
+### Bing Webmaster Tools
+
+1. Sign in to [Bing Webmaster Tools](https://www.bing.com/webmasters) and add and verify your site.
+2. Open **Settings > API access**, accept the terms, and click **Generate API Key**. There is one key per user, valid for all of that user's verified sites.
+3. Set it as a secret:
+
+```bash
+npx wrangler secret put BING_API_KEY      # Workers
+export BING_API_KEY=...                   # Node / stdio
+```
+
+The server calls the JSON API at `https://ssl.bing.com/webmaster/api.svc/json/<Method>` (the SOAP and POX endpoints were retired on 2026-08-31). Dates come back from Bing as `/Date(ms-0700)/` and are returned as ISO 8601.
+
+| Tier | Tools |
+|---|---|
+| read | `bing_list_sites`, `bing_get_query_stats`, `bing_get_page_stats`, `bing_get_traffic_stats`, `bing_get_crawl_stats`, `bing_get_crawl_issues`, `bing_get_url_info`, `bing_get_link_counts`, `bing_get_feeds`, `bing_get_url_submission_quota` |
+| write | `bing_submit_urls` (up to 500 URLs per call; uses the daily quota), `bing_submit_feed` |
+| destructive | `bing_remove_feed` |
+
+Known limits:
+
+- There is no URL inspection API for Bing. `bing_get_url_info` returns only basic index metadata.
+- `GetQueryStats` and `GetPageStats` take no date range; Bing returns a fixed recent window, by week. `start_date` / `end_date` only filter the returned rows.
+- In every stats tool, `data_range` is the first and last date of the rows returned (after the date filter) and `source_window` is the span of everything Bing sent. Dates must be real calendar dates, and `start_date` after `end_date` is an error.
+- Average positions are returned as Bing reports them. Third-party reports say they may be scaled by 10.
+- From Cloudflare Workers, Bing may answer `ThrottleIP` because Workers share egress IPs (reported by another project, not verified here). The tools say so when it happens; run the Node or stdio entry from your own machine if it persists.
+- Only API-key auth is supported. Bing's OAuth 2.0 (`webmaster.read` / `webmaster.manage`) is a possible follow-up.
+
+### IndexNow
+
+[IndexNow](https://www.indexnow.org/documentation) tells search engines that URLs were added, updated or deleted. A submission to one participating engine is shared with the others (Bing, Yandex, Seznam, Naver, Yep and more; Google does not take part). It needs no console account, only a key file on your site.
+
+1. Generate a key: 8-128 characters of `a-z`, `A-Z`, `0-9` and `-`, for example `uuidgen | tr -d -` or `openssl rand -hex 16`.
+2. Host a UTF-8 text file containing only the key at `https://<host>/<key>.txt` on every host you will submit for. To use another path, set `INDEXNOW_KEY_LOCATION` (a path like `/keys/indexnow.txt` applies to every host; a key file outside the root only covers URLs under its directory).
+3. Set the key as a secret:
+
+```bash
+npx wrangler secret put INDEXNOW_KEY      # Workers
+export INDEXNOW_KEY=...                   # Node / stdio
+```
+
+| Tier | Tools |
+|---|---|
+| read | `indexnow_check_key_file` (fetches your key file over https and checks it holds the key; contacts no search engine) |
+| write | `indexnow_submit_urls` (up to 10,000 URLs per call, all on one host) |
+
+`indexnow_check_key_file` only contacts hosts you allowed: those listed in `INDEXNOW_HOSTS`, plus the host of an absolute `INDEXNOW_KEY_LOCATION`. Any other host is refused without a request, so the key (which is part of the default file name) is never sent to a host a caller picks. The check always uses https, follows redirects only to https on the same host (at most 3), reads at most 64 KiB, and gives up after 30 seconds.
+
+Submissions go to `https://api.indexnow.org/indexnow` as `{host, key, urlList}`, plus `keyLocation` when `INDEXNOW_KEY_LOCATION` is set (a path is resolved to `https://<host><path>`); the host is taken from the URLs. HTTP 200 means received and 202 means received with key validation pending; neither means indexed. 403 means the key file was not found or does not match, 422 means URLs outside the host or a malformed key, and 429 means too many submissions. Avoid resubmitting unchanged URLs.
+
+### Yandex Webmaster
+
+Setting `YANDEX_OAUTH_TOKEN` adds 27 `yandex_*` tools for the [Yandex Webmaster API v4](https://yandex.com/dev/webmaster/doc/en/).
+
+**Get a token** (from the [Webmaster API authorization page](https://yandex.com/dev/webmaster/doc/en/tasks/how-to-get-oauth) and Yandex ID's [manual token guide](https://yandex.com/dev/id/doc/en/tokens/debug-token)):
+
+1. Sign in to Yandex with the account that owns the sites in Yandex Webmaster.
+2. Create an app at <https://oauth.yandex.com/client/new/>: choose **For API access or debugging**, and under data access add `webmaster:hostinfo` and `webmaster:verify`. The redirect URI is fixed to `https://oauth.yandex.ru/verification_code`.
+3. Copy the app's **ClientID** and open `https://oauth.yandex.com/authorize?response_type=token&client_id=<ClientID>`. Approve, and copy the token from the page you land on.
+4. Store it:
+
+```bash
+npx wrangler secret put YANDEX_OAUTH_TOKEN      # Workers
+export YANDEX_OAUTH_TOKEN=...                   # Node / stdio
+```
+
+The token is valid for about **6 months**. When it expires (or is revoked), the tools answer with an error that says so; repeat step 3 and put the new token. Storing a Yandex grant in KV with an in-Worker OAuth flow, like `/auth/google`, is a planned follow-up.
+
+**Tools.** Every tool takes `host`: a `host_id` from `yandex_list_hosts` (for example `https:example.com:443`) or the site URL exactly as listed there (`https://example.com/`). The user ID that the API needs (`GET /v4/user`) is looked up once per MCP request and reused.
+
+| Tier | Tools |
+|---|---|
+| read | `yandex_list_hosts`, `yandex_get_host`, `yandex_get_host_summary`, `yandex_get_popular_queries`, `yandex_get_queries_history`, `yandex_get_query_history`, `yandex_get_indexing_history`, `yandex_get_indexing_samples`, `yandex_get_in_search_history`, `yandex_get_in_search_samples`, `yandex_get_search_events_history`, `yandex_get_search_events_samples`, `yandex_get_diagnostics`, `yandex_get_sqi_history`, `yandex_get_broken_internal_links`, `yandex_get_broken_internal_links_history`, `yandex_get_external_links`, `yandex_get_external_links_history`, `yandex_list_sitemaps`, `yandex_get_sitemap`, `yandex_list_user_sitemaps`, `yandex_get_recrawl_quota`, `yandex_list_recrawl_tasks`, `yandex_get_recrawl_task` |
+| write (`GSC_SCOPES=full`) | `yandex_add_sitemap`, `yandex_recrawl_url` |
+| destructive (`GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true`) | `yandex_delete_sitemap` |
+
+**Limits.** Recrawl has a per-site daily quota (`yandex_get_recrawl_quota`). When Yandex answers 429 (`QUOTA_EXCEEDED` or `TOO_MANY_REQUESTS_ERROR`), the tool reports the daily quota and the time the new quota starts; 429 is not retried, 5xx is retried twice. Query statistics come from the TOP-3000 queries; the sample endpoints return at most 50,000 URLs. Dates (`date_from`/`date_to`) are passed through as given; `YYYY-MM-DD` is the safest form. Response timestamps are returned as ISO 8601 with Yandex's original offset.
+
+Not covered yet: adding or deleting sites, ownership verification, important URLs, RSS feeds, and the in-Worker OAuth flow.
+
+### Seznam Webmaster
+
+Setting `SEZNAM_API_KEYS` (or `SEZNAM_API_KEY`) adds 6 `seznam_*` tools for the [Seznam Webmaster](https://reporter.seznam.cz/wm/) API. Seznam publishes the API as a Swagger document at <https://reporter.seznam.cz/wm-api/swagger.json> (interactive: <https://reporter.seznam.cz/wm-api/ui/>). Seznam Webmaster is in beta: it reports page counts and per-URL details, and accepts reindex requests. It has **no search query or traffic data**.
+
+**Keys are per site.** The API has no site parameter; the key selects the site. Generate one per site in Seznam Webmaster: sign in at <https://reporter.seznam.cz/wm/>, open the verified site, and create an access key in its **API** section. A key with read rights is enough for everything except `seznam_reindex_url`, which needs write rights. Then store the keys as one JSON object:
+
+```bash
+# Workers
+echo '{"example.cz":"<key>","https://shop.example.cz":"<key>"}' | npx wrangler secret put SEZNAM_API_KEYS
+npx wrangler secret put SEZNAM_API_KEY          # alternative for a single site
+# Node / stdio
+export SEZNAM_API_KEYS='{"example.cz":"<key>"}'
+```
+
+Site names are host names, optionally with the protocol (Seznam treats `http` and `https` as different sites); `www.` is significant. Tools take an optional `site`; it can be omitted when one site is configured, and the page tools also pick the key from the URL's host. `SEZNAM_API_KEY` appears as the site `default` and is used when no `SEZNAM_API_KEYS` entry matches. Invalid `SEZNAM_API_KEYS` entries are ignored; `get_capabilities` and `seznam_list_sites` list the configured site names (never the keys) and warn about ignored entries. If no usable key is left, Seznam shows as not configured. Keys travel in the `key` query parameter, as the API requires; they are scrubbed from every error message.
+
+| Tier | Tools |
+|---|---|
+| read | `seznam_list_sites`, `seznam_get_site`, `seznam_get_documents`, `seznam_get_documents_history`, `seznam_get_document` |
+| write (`GSC_SCOPES=full`, key with write rights) | `seznam_reindex_url` |
+
+There are no destructive Seznam tools; the API has no delete operations.
+
+**Limits** (from the Swagger description): at most 5 requests per second and 100 per minute per user and site, and at most 500 reindex requests a day. 429, 502 and 503 are retried twice with backoff. HTTP 204 means "the request succeeded but the data is not available yet" (new sites usually get data within 24 hours) and is reported as `data_available: false`, not as an error. `/web/documents` returns a random sample of at most 1,000 URLs per category; the tools trim it with `url_limit`. Page timestamps (`index_timestamp`, `download_timestamp`) are passed through as Seznam returns them because their unit is not documented.
 
 ## Development
 

@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { ServerServices } from '../mcp/context.js';
 import { scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
+import { engineCapabilityLines } from '../engines/index.js';
 
 const AEO_GEO_BOUNDARY = `
 AEO/GEO CAPABILITY BOUNDARY:
@@ -106,14 +107,16 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       if (tier === 'destructive') {
         lines.push('', 'Destructive (GSC_ALLOW_DESTRUCTIVE=true):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
       } else {
-        lines.push(
-          '',
-          'Not enabled at the current tier:',
-          `  - write tools: set GSC_SCOPES=full`,
-          `  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true`,
+        const notEnabled: string[] = [];
+        if (tier === 'read') notEnabled.push('  - write tools: set GSC_SCOPES=full');
+        notEnabled.push(
+          tier === 'read'
+            ? '  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true'
+            : '  - destructive tools (add_site/delete_site/delete_sitemap): set GSC_ALLOW_DESTRUCTIVE=true',
         );
+        lines.push('', 'Not enabled at the current tier:', ...notEnabled);
       }
-      lines.push('', AEO_GEO_BOUNDARY, '');
+      lines.push(...engineCapabilityLines(svc.config), '', AEO_GEO_BOUNDARY, '');
       return textResult(lines.join('\n'));
     },
   );

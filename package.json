@@ -2,6 +2,7 @@
   "name": "gsc-mcp-ts",
   "version": "0.1.0",
   "description": "Google Search Console MCP Server (TypeScript) — Hono, runs on Node 24 and Cloudflare Workers",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"

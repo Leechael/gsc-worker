@@ -54,4 +54,16 @@
   //   TOKEN_ENCRYPTION_KEY                     base64 of 32 random bytes
   //   GOOGLE_REFRESH_TOKEN                     optional fallback when nothing is stored in KV
   //   MCP_AUTH_TOKEN                           only with MCP_AUTH_MODE=bearer
+  //
+  // Optional search engines (tools appear only when the secret is set):
+  //   BING_API_KEY                             Bing Webmaster Tools > Settings > API access > Generate API Key
+  //                                            npx wrangler secret put BING_API_KEY
+  //   INDEXNOW_KEY                             your IndexNow key; host it at https://<host>/<key>.txt
+  //                                            npx wrangler secret put INDEXNOW_KEY
+  //   (optional var INDEXNOW_KEY_LOCATION: key file URL, or a path such as /keys/indexnow.txt)
+  //   (optional var INDEXNOW_HOSTS: hosts indexnow_check_key_file may fetch, e.g. "example.com,www.example.com")
+  //   YANDEX_OAUTH_TOKEN                       oauth.yandex.com token (webmaster:hostinfo, webmaster:verify); expires in ~6 months
+  //                                            npx wrangler secret put YANDEX_OAUTH_TOKEN
+  //   SEZNAM_API_KEYS                          JSON {"site":"key"} of per-site keys from reporter.seznam.cz/wm > site > API
+  //                                            npx wrangler secret put SEZNAM_API_KEYS   (or SEZNAM_API_KEY for one site)
 }
