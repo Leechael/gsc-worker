@@ -20,6 +20,7 @@ Search Console access uses a Google OAuth refresh token for a single Google acco
 - [Client configuration](#client-configuration)
 - [Environment variables](#environment-variables)
 - [Tools and scope tiers](#tools-and-scope-tiers)
+- [Other search engines](#other-search-engines)
 - [Development](#development)
 
 ## Deploy to Cloudflare Workers
@@ -232,6 +233,7 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `GSC_ALLOW_DESTRUCTIVE` | all | var | `false` | With `GSC_SCOPES=full`, enables add/delete tools |
 | `GSC_DATA_STATE` | all | var | `all` | `all` (matches the GSC UI) or `final` |
 | `GSC_SKIP_OAUTH` | all | var | | Accepted for compatibility with mcp-gsc and ignored (no service accounts) |
+| `BING_API_KEY` | all | secret | | Bing Webmaster Tools API key; enables the `bing_*` tools ([details](#bing-webmaster-tools)) |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -248,6 +250,37 @@ All 21 tools are always registered. Tools above the current tier return upgrade 
 | destructive | `GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
 
 Start with `get_capabilities`: it reports the tier, auth status, token source, and the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API).
+
+## Other search engines
+
+Engines other than Google are opt-in. Their tools are registered only when the engine's secret is set, and they use the same scope tiers as the Google tools: read tools always run, submit tools need `GSC_SCOPES=full`, and remove tools also need `GSC_ALLOW_DESTRUCTIVE=true`. Note that `GSC_SCOPES=full` also switches the Google grant to the full `webmasters` scope, so re-authorize Google after changing it. `get_capabilities` lists each engine as enabled or not configured, without showing secret values.
+
+### Bing Webmaster Tools
+
+1. Sign in to [Bing Webmaster Tools](https://www.bing.com/webmasters) and add and verify your site.
+2. Open **Settings > API access**, accept the terms, and click **Generate API Key**. There is one key per user, valid for all of that user's verified sites.
+3. Set it as a secret:
+
+```bash
+npx wrangler secret put BING_API_KEY      # Workers
+export BING_API_KEY=...                   # Node / stdio
+```
+
+The server calls the JSON API at `https://ssl.bing.com/webmaster/api.svc/json/<Method>` (the SOAP and POX endpoints were retired). Dates come back from Bing as `/Date(ms-0700)/` and are returned as ISO 8601.
+
+| Tier | Tools |
+|---|---|
+| read | `bing_list_sites`, `bing_get_query_stats`, `bing_get_page_stats`, `bing_get_traffic_stats`, `bing_get_crawl_stats`, `bing_get_crawl_issues`, `bing_get_url_info`, `bing_get_link_counts`, `bing_get_feeds`, `bing_get_url_submission_quota` |
+| write | `bing_submit_urls` (up to 500 URLs per call; uses the daily quota), `bing_submit_feed` |
+| destructive | `bing_remove_feed` |
+
+Known limits:
+
+- There is no URL inspection API for Bing. `bing_get_url_info` returns only basic index metadata.
+- `GetQueryStats` and `GetPageStats` take no date range; Bing returns a fixed recent window, by week. `start_date` / `end_date` only filter the returned rows.
+- Average positions are returned as Bing reports them. Third-party reports say they may be scaled by 10.
+- From Cloudflare Workers, Bing may answer `ThrottleIP` because Workers share egress IPs (reported by another project, not verified here). The tools say so when it happens; run the Node or stdio entry from your own machine if it persists.
+- Only API-key auth is supported. Bing's OAuth 2.0 (`webmaster.read` / `webmaster.manage`) is a possible follow-up.
 
 ## Development
 

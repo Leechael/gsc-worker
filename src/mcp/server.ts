@@ -8,6 +8,7 @@ import { registerAnalyticsTools } from '../tools/analytics.js';
 import { registerAdvancedAnalyticsTools } from '../tools/analytics-advanced.js';
 import { registerInspectionTools } from '../tools/inspection.js';
 import { registerSitemapsTools } from '../tools/sitemaps.js';
+import { registerEngineTools } from '../engines/index.js';
 
 /**
  * Per-request MCP server factory (plan §3): every HTTP request gets a fresh
@@ -17,6 +18,9 @@ import { registerSitemapsTools } from '../tools/sitemaps.js';
  * themselves at runtime via the scope tier (plan §6.1) instead of being
  * conditionally registered, so prompts referencing them get upgrade guidance
  * rather than "tool not found".
+ *
+ * Other search engines (src/engines/) are opt-in: their tools are registered
+ * only when the engine's secret is configured, and then tier-gated the same way.
  */
 export function buildMcpServer(): McpServer {
   const svc = getServices();
@@ -28,5 +32,6 @@ export function buildMcpServer(): McpServer {
   registerAdvancedAnalyticsTools(server, svc);
   registerInspectionTools(server, svc);
   registerSitemapsTools(server, svc);
+  registerEngineTools(server, svc);
   return server;
 }

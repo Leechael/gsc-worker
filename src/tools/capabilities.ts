@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { ServerServices } from '../mcp/context.js';
 import { scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
+import { engineCapabilityLines } from '../engines/index.js';
 
 const AEO_GEO_BOUNDARY = `
 AEO/GEO CAPABILITY BOUNDARY:
@@ -115,7 +116,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         );
         lines.push('', 'Not enabled at the current tier:', ...notEnabled);
       }
-      lines.push('', AEO_GEO_BOUNDARY, '');
+      lines.push(...engineCapabilityLines(svc.config), '', AEO_GEO_BOUNDARY, '');
       return textResult(lines.join('\n'));
     },
   );

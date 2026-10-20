@@ -54,4 +54,8 @@
   //   TOKEN_ENCRYPTION_KEY                     base64 of 32 random bytes
   //   GOOGLE_REFRESH_TOKEN                     optional fallback when nothing is stored in KV
   //   MCP_AUTH_TOKEN                           only with MCP_AUTH_MODE=bearer
+  //
+  // Optional search engines (tools appear only when the secret is set):
+  //   BING_API_KEY                             Bing Webmaster Tools > Settings > API access > Generate API Key
+  //                                            npx wrangler secret put BING_API_KEY
 }
