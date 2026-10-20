@@ -237,6 +237,7 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `INDEXNOW_KEY` | all | secret | | IndexNow key; enables the `indexnow_*` tools ([details](#indexnow)) |
 | `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
 | `INDEXNOW_HOSTS` | all | var | | Hosts whose key file `indexnow_check_key_file` may fetch, comma-separated (e.g. `example.com,www.example.com`); the host of an absolute `INDEXNOW_KEY_LOCATION` is always allowed |
+| `YANDEX_OAUTH_TOKEN` | all | secret | | Yandex OAuth token; enables the `yandex_*` tools ([details](#yandex-webmaster)) |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -307,6 +308,36 @@ export INDEXNOW_KEY=...                   # Node / stdio
 `indexnow_check_key_file` only contacts hosts you allowed: those listed in `INDEXNOW_HOSTS`, plus the host of an absolute `INDEXNOW_KEY_LOCATION`. Any other host is refused without a request, so the key (which is part of the default file name) is never sent to a host a caller picks. The check always uses https, follows redirects only to https on the same host (at most 3), reads at most 64 KiB, and gives up after 30 seconds.
 
 Submissions go to `https://api.indexnow.org/indexnow` as `{host, key, urlList}`, plus `keyLocation` when `INDEXNOW_KEY_LOCATION` is set (a path is resolved to `https://<host><path>`); the host is taken from the URLs. HTTP 200 means received and 202 means received with key validation pending; neither means indexed. 403 means the key file was not found or does not match, 422 means URLs outside the host or a malformed key, and 429 means too many submissions. Avoid resubmitting unchanged URLs.
+
+### Yandex Webmaster
+
+Setting `YANDEX_OAUTH_TOKEN` adds 27 `yandex_*` tools for the [Yandex Webmaster API v4](https://yandex.com/dev/webmaster/doc/en/).
+
+**Get a token** (from the [Webmaster API authorization page](https://yandex.com/dev/webmaster/doc/en/tasks/how-to-get-oauth) and Yandex ID's [manual token guide](https://yandex.com/dev/id/doc/en/tokens/debug-token)):
+
+1. Sign in to Yandex with the account that owns the sites in Yandex Webmaster.
+2. Create an app at <https://oauth.yandex.com/client/new/>: choose **For API access or debugging**, and under data access add `webmaster:hostinfo` and `webmaster:verify`. The redirect URI is fixed to `https://oauth.yandex.ru/verification_code`.
+3. Copy the app's **ClientID** and open `https://oauth.yandex.com/authorize?response_type=token&client_id=<ClientID>`. Approve, and copy the token from the page you land on.
+4. Store it:
+
+```bash
+npx wrangler secret put YANDEX_OAUTH_TOKEN      # Workers
+export YANDEX_OAUTH_TOKEN=...                   # Node / stdio
+```
+
+The token is valid for about **6 months**. When it expires (or is revoked), the tools answer with an error that says so; repeat step 3 and put the new token. Storing a Yandex grant in KV with an in-Worker OAuth flow, like `/auth/google`, is a planned follow-up.
+
+**Tools.** Every tool takes `host`: a `host_id` from `yandex_list_hosts` (for example `https:example.com:443`) or the site URL exactly as listed there (`https://example.com/`). The user ID that the API needs (`GET /v4/user`) is looked up once per MCP request and reused.
+
+| Tier | Tools |
+|---|---|
+| read | `yandex_list_hosts`, `yandex_get_host`, `yandex_get_host_summary`, `yandex_get_popular_queries`, `yandex_get_queries_history`, `yandex_get_query_history`, `yandex_get_indexing_history`, `yandex_get_indexing_samples`, `yandex_get_in_search_history`, `yandex_get_in_search_samples`, `yandex_get_search_events_history`, `yandex_get_search_events_samples`, `yandex_get_diagnostics`, `yandex_get_sqi_history`, `yandex_get_broken_internal_links`, `yandex_get_broken_internal_links_history`, `yandex_get_external_links`, `yandex_get_external_links_history`, `yandex_list_sitemaps`, `yandex_get_sitemap`, `yandex_list_user_sitemaps`, `yandex_get_recrawl_quota`, `yandex_list_recrawl_tasks`, `yandex_get_recrawl_task` |
+| write (`GSC_SCOPES=full`) | `yandex_add_sitemap`, `yandex_recrawl_url` |
+| destructive (`GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true`) | `yandex_delete_sitemap` |
+
+**Limits.** Recrawl has a per-site daily quota (`yandex_get_recrawl_quota`). When Yandex answers 429 (`QUOTA_EXCEEDED` or `TOO_MANY_REQUESTS_ERROR`), the tool reports the daily quota and the time the new quota starts; 429 is not retried, 5xx is retried twice. Query statistics come from the TOP-3000 queries; the sample endpoints return at most 50,000 URLs. Dates (`date_from`/`date_to`) are passed through as given; `YYYY-MM-DD` is the safest form. Response timestamps are returned as ISO 8601 with Yandex's original offset.
+
+Not covered yet: adding or deleting sites, ownership verification, important URLs, RSS feeds, and the in-Worker OAuth flow.
 
 ## Development
 

@@ -90,7 +90,7 @@ export interface Config {
 }
 
 /** Env name prefixes owned by src/engines/* (add one per new engine). */
-export const ENGINE_ENV_PREFIXES = ['BING_', 'INDEXNOW_'] as const;
+export const ENGINE_ENV_PREFIXES = ['BING_', 'INDEXNOW_', 'YANDEX_', 'SEZNAM_'] as const;
 
 type EnvSource = Record<string, unknown>;
 

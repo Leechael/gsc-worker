@@ -2,5 +2,6 @@
 import type { EngineModule } from './types.js';
 import { bingEngine } from './bing/index.js';
 import { indexNowEngine } from './indexnow/index.js';
+import { yandexEngine } from './yandex/index.js';
 
-export const ENGINES: readonly EngineModule[] = [bingEngine, indexNowEngine];
+export const ENGINES: readonly EngineModule[] = [bingEngine, indexNowEngine, yandexEngine];
