@@ -238,6 +238,8 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
 | `INDEXNOW_HOSTS` | all | var | | Hosts whose key file `indexnow_check_key_file` may fetch, comma-separated (e.g. `example.com,www.example.com`); the host of an absolute `INDEXNOW_KEY_LOCATION` is always allowed |
 | `YANDEX_OAUTH_TOKEN` | all | secret | | Yandex OAuth token; enables the `yandex_*` tools ([details](#yandex-webmaster)) |
+| `SEZNAM_API_KEYS` | all | secret | | JSON object mapping each site to its Seznam API key; enables the `seznam_*` tools ([details](#seznam-webmaster)) |
+| `SEZNAM_API_KEY` | all | secret | | A single Seznam API key (one site, or the fallback when no `SEZNAM_API_KEYS` entry matches) |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -338,6 +340,31 @@ The token is valid for about **6 months**. When it expires (or is revoked), the 
 **Limits.** Recrawl has a per-site daily quota (`yandex_get_recrawl_quota`). When Yandex answers 429 (`QUOTA_EXCEEDED` or `TOO_MANY_REQUESTS_ERROR`), the tool reports the daily quota and the time the new quota starts; 429 is not retried, 5xx is retried twice. Query statistics come from the TOP-3000 queries; the sample endpoints return at most 50,000 URLs. Dates (`date_from`/`date_to`) are passed through as given; `YYYY-MM-DD` is the safest form. Response timestamps are returned as ISO 8601 with Yandex's original offset.
 
 Not covered yet: adding or deleting sites, ownership verification, important URLs, RSS feeds, and the in-Worker OAuth flow.
+
+### Seznam Webmaster
+
+Setting `SEZNAM_API_KEYS` (or `SEZNAM_API_KEY`) adds 6 `seznam_*` tools for the [Seznam Webmaster](https://reporter.seznam.cz/wm/) API. Seznam publishes the API as a Swagger document at <https://reporter.seznam.cz/wm-api/swagger.json> (interactive: <https://reporter.seznam.cz/wm-api/ui/>). Seznam Webmaster is in beta: it reports page counts and per-URL details, and accepts reindex requests. It has **no search query or traffic data**.
+
+**Keys are per site.** The API has no site parameter; the key selects the site. Generate one per site in Seznam Webmaster: sign in at <https://reporter.seznam.cz/wm/>, open the verified site, and create an access key in its **API** section. A key with read rights is enough for everything except `seznam_reindex_url`, which needs write rights. Then store the keys as one JSON object:
+
+```bash
+# Workers
+echo '{"example.cz":"<key>","https://shop.example.cz":"<key>"}' | npx wrangler secret put SEZNAM_API_KEYS
+npx wrangler secret put SEZNAM_API_KEY          # alternative for a single site
+# Node / stdio
+export SEZNAM_API_KEYS='{"example.cz":"<key>"}'
+```
+
+Site names are host names, optionally with the protocol (Seznam treats `http` and `https` as different sites); `www.` is significant. Tools take an optional `site`; it can be omitted when one site is configured, and the page tools also pick the key from the URL's host. `SEZNAM_API_KEY` appears as the site `default` and is used when no `SEZNAM_API_KEYS` entry matches. Invalid `SEZNAM_API_KEYS` entries are ignored; `get_capabilities` and `seznam_list_sites` list the configured site names (never the keys) and warn about ignored entries. If no usable key is left, Seznam shows as not configured. Keys travel in the `key` query parameter, as the API requires; they are scrubbed from every error message.
+
+| Tier | Tools |
+|---|---|
+| read | `seznam_list_sites`, `seznam_get_site`, `seznam_get_documents`, `seznam_get_documents_history`, `seznam_get_document` |
+| write (`GSC_SCOPES=full`, key with write rights) | `seznam_reindex_url` |
+
+There are no destructive Seznam tools; the API has no delete operations.
+
+**Limits** (from the Swagger description): at most 5 requests per second and 100 per minute per user and site, and at most 500 reindex requests a day. 429, 502 and 503 are retried twice with backoff. HTTP 204 means "the request succeeded but the data is not available yet" (new sites usually get data within 24 hours) and is reported as `data_available: false`, not as an error. `/web/documents` returns a random sample of at most 1,000 URLs per category; the tools trim it with `url_limit`. Page timestamps (`index_timestamp`, `download_timestamp`) are passed through as Seznam returns them because their unit is not documented.
 
 ## Development
 

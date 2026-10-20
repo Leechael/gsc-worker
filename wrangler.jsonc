@@ -64,4 +64,6 @@
   //   (optional var INDEXNOW_HOSTS: hosts indexnow_check_key_file may fetch, e.g. "example.com,www.example.com")
   //   YANDEX_OAUTH_TOKEN                       oauth.yandex.com token (webmaster:hostinfo, webmaster:verify); expires in ~6 months
   //                                            npx wrangler secret put YANDEX_OAUTH_TOKEN
+  //   SEZNAM_API_KEYS                          JSON {"site":"key"} of per-site keys from reporter.seznam.cz/wm > site > API
+  //                                            npx wrangler secret put SEZNAM_API_KEYS   (or SEZNAM_API_KEY for one site)
 }
