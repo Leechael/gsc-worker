@@ -106,12 +106,14 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       if (tier === 'destructive') {
         lines.push('', 'Destructive (GSC_ALLOW_DESTRUCTIVE=true):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
       } else {
-        lines.push(
-          '',
-          'Not enabled at the current tier:',
-          `  - write tools: set GSC_SCOPES=full`,
-          `  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true`,
+        const notEnabled: string[] = [];
+        if (tier === 'read') notEnabled.push('  - write tools: set GSC_SCOPES=full');
+        notEnabled.push(
+          tier === 'read'
+            ? '  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true'
+            : '  - destructive tools (add_site/delete_site/delete_sitemap): set GSC_ALLOW_DESTRUCTIVE=true',
         );
+        lines.push('', 'Not enabled at the current tier:', ...notEnabled);
       }
       lines.push('', AEO_GEO_BOUNDARY, '');
       return textResult(lines.join('\n'));
