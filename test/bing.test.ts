@@ -367,3 +367,120 @@ test('responses without the d wrapper are passed through; non-JSON 200 is an err
   const html = new BingClient({ apiKey: KEY, fetchImpl: mockFetch(() => new Response('<html/>')).fetchImpl });
   await assert.rejects(html.get('GetUserSites'), /non-JSON/);
 });
+
+// ---------- review hardening ----------
+
+/** A 200 response whose body stream fails while it is read. */
+function brokenBody(status = 200): Response {
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.error(new TypeError('stream reset'));
+    },
+  });
+  return new Response(body, { status });
+}
+
+test('a 2xx response whose body cannot be read is an error, not an empty success', async () => {
+  const client = new BingClient({ apiKey: KEY, fetchImpl: mockFetch(() => brokenBody()).fetchImpl });
+  await assert.rejects(client.post('SubmitUrl', { siteUrl: 'https://example.com/', url: 'https://example.com/a' }), (e: unknown) => {
+    assert.ok(e instanceof BingApiError);
+    assert.equal(e.kind, 'network');
+    assert.equal(e.status, 200);
+    assert.match(e.message, /could not be read/);
+    return true;
+  });
+  const { run } = bingServer({ GSC_SCOPES: 'full' }, () => brokenBody());
+  const res = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['https://example.com/a'] });
+  assert.equal(res.isError, true);
+  assert.doesNotMatch(res.content[0]!.text, /"submitted"/);
+});
+
+test('a failed body read on an error status still maps the status', async () => {
+  const client = new BingClient({ apiKey: KEY, fetchImpl: mockFetch(() => brokenBody(404)).fetchImpl });
+  await assert.rejects(client.get('GetUrlInfo'), (e: unknown) => e instanceof BingApiError && e.kind === 'not-found');
+});
+
+test('form-encoded keys are redacted from errors', async () => {
+  const odd = 'key with space~tilde';
+  const fetchImpl = (async (input: unknown) => {
+    throw new TypeError(`fetch failed for ${String(input)}`);
+  }) as typeof fetch;
+  const client = new BingClient({ apiKey: odd, fetchImpl });
+  await assert.rejects(client.get('GetUserSites'), (e: unknown) => {
+    assert.ok(e instanceof BingApiError);
+    const formEncoded = new URLSearchParams({ k: odd }).toString().slice(2);
+    assert.ok(!e.message.includes(formEncoded), e.message);
+    assert.ok(!e.message.includes(odd));
+    assert.match(e.message, /apikey=\*\*\*/);
+    return true;
+  });
+});
+
+test('date filters reject impossible calendar dates and reversed ranges', async () => {
+  const { run, calls } = bingServer({}, () => json(QUERY_ROWS));
+  const server = new McpServer({ name: 't', version: '0' });
+  bingEngine.register(server, services({ BING_API_KEY: KEY }), mockFetch(() => json([])).fetchImpl);
+  for (const tool of ['bing_get_query_stats', 'bing_get_page_stats', 'bing_get_traffic_stats', 'bing_get_crawl_stats']) {
+    const schema = (toolsOf(server)[tool] as unknown as { inputSchema: { safeParse(v: unknown): { success: boolean } } }).inputSchema;
+    assert.equal(schema.safeParse({ site_url: 'https://example.com/', start_date: '2025-02-30' }).success, false, tool);
+    assert.equal(schema.safeParse({ site_url: 'https://example.com/', end_date: '2025-13-01' }).success, false, tool);
+    assert.equal(schema.safeParse({ site_url: 'https://example.com/', start_date: '2024-02-29' }).success, true, tool);
+    const res = await run(tool, { site_url: 'https://example.com/', start_date: '2025-10-07', end_date: '2025-10-01' });
+    assert.equal(res.isError, true, tool);
+    assert.match(res.content[0]!.text, /start_date \(2025-10-07\) is after end_date \(2025-10-01\)/);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('data_range describes the returned rows and source_window the whole Bing window', async () => {
+  const { run } = bingServer({}, () => json(QUERY_ROWS));
+  const out = JSON.parse((await run('bing_get_query_stats', { site_url: 'https://example.com/', start_date: '2025-10-01' })).content[0]!.text);
+  assert.deepEqual(out.data_range, { first: '2025-10-07', last: '2025-10-07' });
+  assert.deepEqual(out.source_window, { first: '2025-09-30', last: '2025-10-07' });
+  const traffic = bingServer({}, () =>
+    json({ d: [
+      { Date: '/Date(1759215600000-0700)/', Clicks: 1, Impressions: 2 },
+      { Date: '/Date(1759820400000-0700)/', Clicks: 3, Impressions: 4 },
+    ] }),
+  );
+  const t = JSON.parse((await traffic.run('bing_get_traffic_stats', { site_url: 'https://example.com/', start_date: '2025-10-01' })).content[0]!.text);
+  assert.deepEqual(t.data_range, { first: '2025-10-07', last: '2025-10-07' });
+  assert.deepEqual(t.source_window, { first: '2025-09-30', last: '2025-10-07' });
+  const crawl = bingServer({}, () => json({ d: [{ Date: '/Date(1759215600000-0700)/', CrawledPages: 5 }] }));
+  const c = JSON.parse((await crawl.run('bing_get_crawl_stats', { site_url: 'https://example.com/', end_date: '2025-09-01' })).content[0]!.text);
+  assert.deepEqual(c.data_range, { first: null, last: null });
+  assert.deepEqual(c.source_window, { first: '2025-09-30', last: '2025-09-30' });
+});
+
+test('bing_remove_feed validates feed_url before calling Bing', async () => {
+  const { run, calls } = bingServer({ GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' }, () => json({ d: null }));
+  for (const feed_url of ['not a url', 'ftp://example.com/s.xml', 'https://u:p@example.com/s.xml']) {
+    const res = await run('bing_remove_feed', { site_url: 'https://example.com/', feed_url });
+    assert.equal(res.isError, true, feed_url);
+    assert.match(res.content[0]!.text, /feed_url must be an absolute http\(s\) URL/);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal((await run('bing_remove_feed', { site_url: 'https://example.com/', feed_url: 'https://example.com/s.xml' })).isError, undefined);
+  assert.equal(calls[0]!.url.pathname.endsWith('/RemoveFeed'), true);
+});
+
+test('bing_submit_urls rejects blank-only lists and URLs with credentials', async () => {
+  const { run, calls } = bingServer({ GSC_SCOPES: 'full' }, () => json({ d: null }));
+  const blank = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['  ', ' '] });
+  assert.equal(blank.isError, true);
+  assert.match(blank.content[0]!.text, /at least one non-empty URL/);
+  const creds = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['https://u:p@example.com/a'] });
+  assert.equal(creds.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('parseBingDate keeps the calendar day of ISO strings in their own offset', () => {
+  assert.deepEqual(parseBingDate('2025-01-01T00:30:00+08:00'), { iso: '2024-12-31T16:30:00.000Z', date: '2025-01-01' });
+  assert.deepEqual(parseBingDate('2025-01-01T23:30:00-07:00'), { iso: '2025-01-02T06:30:00.000Z', date: '2025-01-01' });
+  assert.deepEqual(parseBingDate('2025-09-16T00:00:00.0000000-0700'), { iso: '2025-09-16T07:00:00.000Z', date: '2025-09-16' });
+  // No zone: read as UTC, independent of the server's time zone.
+  assert.deepEqual(parseBingDate('2025-03-04T05:06:07'), { iso: '2025-03-04T05:06:07.000Z', date: '2025-03-04' });
+  assert.deepEqual(parseBingDate('2025-03-04'), { iso: '2025-03-04T00:00:00.000Z', date: '2025-03-04' });
+  assert.equal(parseBingDate('2025-02-30T00:00:00Z'), null);
+  assert.equal(parseBingDate('0001-01-01T00:00:00'), null);
+});

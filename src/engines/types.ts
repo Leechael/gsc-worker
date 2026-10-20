@@ -80,11 +80,16 @@ export function redactSecret(text: string, secret: string | undefined): string {
   return out;
 }
 
-/** Parse an absolute http(s) URL; null when it is not one. */
+/**
+ * Parse an absolute http(s) URL; null when it is not one, or when it carries
+ * credentials (user:password@host), which must never be forwarded to a search
+ * engine.
+ */
 export function parseHttpUrl(raw: string): URL | null {
   try {
     const u = new URL(raw.trim());
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.username === '' && u.password === '' ? u : null;
   } catch {
     return null;
   }

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { ServerServices } from '../../mcp/context.js';
 import { errorResult, jsonResult } from '../../tools/helpers.js';
 import { engineTierGate, parseHttpUrl, type EngineToolInfo } from '../types.js';
-import { BingApiError, BingClient, bingDay, bingIso, decodeCrawlIssues } from './client.js';
+import { BingApiError, BingClient, bingDay, bingIso, decodeCrawlIssues, isCalendarDate } from './client.js';
 
 export const BING_LABEL = 'Bing Webmaster Tools';
 export const BING_SUBMIT_BATCH_MAX = 500;
@@ -32,7 +32,8 @@ export const BING_TOOLS: readonly EngineToolInfo[] = [
 const POSITION_NOTE =
   'Positions are returned as Bing reports them. Third-party reports say they may be scaled by 10 (e.g. 25 meaning 2.5); compare with the Bing Webmaster Tools UI before relying on them.';
 const WINDOW_NOTE =
-  'This Bing method takes no date range and returns a fixed recent window chosen by Bing; start_date/end_date only filter the returned rows.';
+  'This Bing method takes no date range and returns a fixed recent window chosen by Bing; start_date/end_date only filter the returned rows. ' +
+  'data_range spans the rows returned; source_window spans everything Bing sent.';
 
 const siteUrlSchema = z
   .string()
@@ -41,7 +42,13 @@ const siteUrlSchema = z
 const dateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
+  .refine(isCalendarDate, 'Use a real calendar date (YYYY-MM-DD)')
   .nullish();
+
+/** Error text when start_date is after end_date, else null. */
+function rangeError(start?: string | null, end?: string | null): string | null {
+  return start && end && start > end ? `Error: start_date (${start}) is after end_date (${end}).` : null;
+}
 const rowLimitSchema = z.number().int().min(1).max(10000).nullish().describe('Maximum rows to return (default 100).');
 
 interface RawQueryStats {
@@ -199,7 +206,8 @@ async function queryLikeStats(client: BingClient, method: 'GetQueryStats' | 'Get
   return jsonResult({
     site_url: args.site_url,
     source: method,
-    data_range: dateSpan(all.map((r) => r.date)),
+    data_range: dateSpan(rows.map((r) => r.date)),
+    source_window: dateSpan(all.map((r) => r.date)),
     filter: { start_date: args.start_date ?? null, end_date: args.end_date ?? null },
     aggregated: aggregate,
     total_rows: out.length,
@@ -254,6 +262,8 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
       inputSchema: z.object(statsShape),
     },
     async (args) => {
+      const bad = rangeError(args.start_date, args.end_date);
+      if (bad) return errorResult(bad);
       try {
         return await queryLikeStats(client, 'GetQueryStats', 'query', args);
       } catch (e) {
@@ -272,6 +282,8 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
       inputSchema: z.object(statsShape),
     },
     async (args) => {
+      const bad = rangeError(args.start_date, args.end_date);
+      if (bad) return errorResult(bad);
       try {
         return await queryLikeStats(client, 'GetPageStats', 'page', args);
       } catch (e) {
@@ -294,10 +306,12 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
       }),
     },
     async ({ site_url, start_date, end_date }) => {
+      const bad = rangeError(start_date, end_date);
+      if (bad) return errorResult(bad);
       try {
         const raw = list<RawTraffic>(await client.get<unknown>('GetRankAndTrafficStats', { siteUrl: site_url }));
-        const rows = raw
-          .map((r) => ({ date: bingDay(r.Date), clicks: num(r.Clicks), impressions: num(r.Impressions) }))
+        const all = raw.map((r) => ({ date: bingDay(r.Date), clicks: num(r.Clicks), impressions: num(r.Impressions) }));
+        const rows = all
           .filter((r) => inRange(r.date, start_date, end_date))
           .sort((a, b) => String(a.date).localeCompare(String(b.date)))
           .map((r) => ({ ...r, ctr: ctr(r.clicks, r.impressions) }));
@@ -307,6 +321,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
           site_url,
           source: 'GetRankAndTrafficStats',
           data_range: dateSpan(rows.map((r) => r.date)),
+          source_window: dateSpan(all.map((r) => r.date)),
           totals: { clicks, impressions, ctr: ctr(clicks, impressions) },
           days: rows.length,
           rows,
@@ -329,10 +344,11 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
       }),
     },
     async ({ site_url, start_date, end_date }) => {
+      const bad = rangeError(start_date, end_date);
+      if (bad) return errorResult(bad);
       try {
         const raw = list<RawCrawlStats>(await client.get<unknown>('GetCrawlStats', { siteUrl: site_url }));
-        const rows = raw
-          .map((r) => ({
+        const all = raw.map((r) => ({
             date: bingDay(r.Date),
             crawled_pages: num(r.CrawledPages),
             crawl_errors: num(r.CrawlErrors),
@@ -346,10 +362,18 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
             code_4xx: num(r.Code4xx),
             code_5xx: num(r.Code5xx),
             all_other_codes: num(r.AllOtherCodes),
-          }))
+          }));
+        const rows = all
           .filter((r) => inRange(r.date, start_date, end_date))
           .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-        return jsonResult({ site_url, source: 'GetCrawlStats', data_range: dateSpan(rows.map((r) => r.date)), days: rows.length, rows });
+        return jsonResult({
+          site_url,
+          source: 'GetCrawlStats',
+          data_range: dateSpan(rows.map((r) => r.date)),
+          source_window: dateSpan(all.map((r) => r.date)),
+          days: rows.length,
+          rows,
+        });
       } catch (e) {
         return fail(e);
       }
@@ -522,9 +546,10 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
     async ({ site_url, urls }) => {
       const gate = engineTierGate(tier(), 'bing_submit_urls', 'write', BING_LABEL);
       if (gate) return errorResult(gate);
-      const cleaned = [...new Set(urls.map((u) => u.trim()))];
+      const cleaned = [...new Set(urls.map((u) => u.trim()))].filter((u) => u.length > 0);
+      if (cleaned.length === 0) return errorResult('Error: urls must include at least one non-empty URL.');
       const invalid = cleaned.filter((u) => !parseHttpUrl(u));
-      if (invalid.length > 0) return errorResult(`Error: not absolute http(s) URLs: ${invalid.slice(0, 10).join(', ')}`);
+      if (invalid.length > 0) return errorResult(`Error: not absolute http(s) URLs (or they carry credentials): ${invalid.slice(0, 10).join(', ')}`);
       try {
         if (cleaned.length === 1) {
           await client.post('SubmitUrl', { siteUrl: site_url, url: cleaned[0] });
@@ -558,7 +583,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
     async ({ site_url, feed_url }) => {
       const gate = engineTierGate(tier(), 'bing_submit_feed', 'write', BING_LABEL);
       if (gate) return errorResult(gate);
-      if (!parseHttpUrl(feed_url)) return errorResult(`Error: feed_url must be an absolute http(s) URL: ${feed_url}`);
+      if (!parseHttpUrl(feed_url)) return errorResult(`Error: feed_url must be an absolute http(s) URL without credentials: ${feed_url}`);
       try {
         await client.post('SubmitFeed', { siteUrl: site_url, feedUrl: feed_url.trim() });
         return jsonResult({ site_url, feed_url: feed_url.trim(), submitted: true });
@@ -578,6 +603,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
     async ({ site_url, feed_url }) => {
       const gate = engineTierGate(tier(), 'bing_remove_feed', 'destructive', BING_LABEL);
       if (gate) return errorResult(gate);
+      if (!parseHttpUrl(feed_url)) return errorResult(`Error: feed_url must be an absolute http(s) URL without credentials: ${feed_url}`);
       try {
         await client.post('RemoveFeed', { siteUrl: site_url, feedUrl: feed_url.trim() });
         return jsonResult({ site_url, feed_url: feed_url.trim(), removed: true });

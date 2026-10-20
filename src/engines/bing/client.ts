@@ -110,7 +110,18 @@ export class BingClient {
       throw new BingApiError(this.redact(`Bing ${method} request failed: ${reason}`), 'network');
     }
 
-    const text = await res.text().catch(() => '');
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (e) {
+      // A body that cannot be read is never an empty success: a submit would
+      // otherwise report success and a read would return no rows.
+      if (res.ok) {
+        const reason = e instanceof Error ? (e.name === 'TimeoutError' ? `timed out after ${this.timeoutMs} ms` : e.message) : String(e);
+        throw new BingApiError(this.redact(`Bing ${method} response could not be read (HTTP ${res.status}): ${reason}`), 'network', res.status);
+      }
+      text = '';
+    }
     let json: unknown;
     try {
       json = text ? JSON.parse(text) : null;
@@ -130,8 +141,10 @@ export class BingClient {
     return json as T;
   }
 
+  /** Redact the key raw, URL-encoded, and form-encoded (as URLSearchParams writes it into the request URL). */
   private redact(text: string): string {
-    return redactSecret(text, this.apiKey);
+    const formEncoded = new URLSearchParams({ k: this.apiKey }).toString().slice(2);
+    return redactSecret(redactSecret(text, this.apiKey), formEncoded);
   }
 
   private toError(method: string, status: number, fault: Fault | null, raw: string): BingApiError {
@@ -201,6 +214,8 @@ function asFault(json: unknown): Fault | null {
 // ---------- value normalization ----------
 
 const WCF_DATE = /^\/Date\((-?\d+)([+-]\d{4})?\)\/$/;
+/** ISO 8601 date or date-time; group 1 is the calendar date as written, group 3 the zone (absent = no zone). */
+const ISO_DATE = /^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/i;
 
 export interface BingDate {
   /** Instant in UTC, ISO 8601. */
@@ -212,27 +227,39 @@ export interface BingDate {
 /**
  * Parse a WCF JSON date ("/Date(ms)/" or "/Date(ms-0700)/"). The millisecond
  * value is UTC; the optional offset only says which local calendar day Bing
- * meant, so `date` uses it. DateTime.MinValue and unparseable values give null.
+ * meant, so `date` uses it. ISO 8601 strings keep the calendar date as
+ * written (that is the day in their own offset); one without a zone is read
+ * as UTC so the result does not depend on the server's time zone.
+ * DateTime.MinValue and unparseable values give null.
  */
 export function parseBingDate(value: unknown): BingDate | null {
   if (typeof value !== 'string') return null;
   const m = WCF_DATE.exec(value.trim());
-  let ms: number;
-  let offsetMin = 0;
   if (m) {
-    ms = Number(m[1]);
+    const ms = Number(m[1]);
+    let offsetMin = 0;
     if (m[2]) {
       const sign = m[2].startsWith('-') ? -1 : 1;
       offsetMin = sign * (Number(m[2].slice(1, 3)) * 60 + Number(m[2].slice(3, 5)));
     }
-  } else {
-    ms = Date.parse(value);
+    const instant = new Date(ms);
+    if (!Number.isFinite(ms) || Number.isNaN(instant.getTime()) || instant.getUTCFullYear() <= 1) return null;
+    return { iso: instant.toISOString(), date: new Date(ms + offsetMin * 60_000).toISOString().slice(0, 10) };
   }
-  if (!Number.isFinite(ms)) return null;
-  const instant = new Date(ms);
-  if (Number.isNaN(instant.getTime()) || instant.getUTCFullYear() <= 1) return null;
-  const local = new Date(ms + offsetMin * 60_000);
-  return { iso: instant.toISOString(), date: local.toISOString().slice(0, 10) };
+  const iso = ISO_DATE.exec(value.trim());
+  if (!iso) return null;
+  const day = iso[1]!;
+  const zone = iso[3] ?? 'Z';
+  const instant = new Date(`${day}${iso[2] ?? 'T00:00:00'}${zone.toUpperCase()}`);
+  if (Number.isNaN(instant.getTime()) || instant.getUTCFullYear() <= 1 || !isCalendarDate(day)) return null;
+  return { iso: instant.toISOString(), date: day };
+}
+
+/** True for a real YYYY-MM-DD calendar date (rejects 2025-02-30). */
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
 export const bingIso = (v: unknown): string | null => parseBingDate(v)?.iso ?? null;

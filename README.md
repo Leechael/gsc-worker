@@ -266,7 +266,7 @@ npx wrangler secret put BING_API_KEY      # Workers
 export BING_API_KEY=...                   # Node / stdio
 ```
 
-The server calls the JSON API at `https://ssl.bing.com/webmaster/api.svc/json/<Method>` (the SOAP and POX endpoints were retired). Dates come back from Bing as `/Date(ms-0700)/` and are returned as ISO 8601.
+The server calls the JSON API at `https://ssl.bing.com/webmaster/api.svc/json/<Method>` (the SOAP and POX endpoints were retired on 2026-08-31). Dates come back from Bing as `/Date(ms-0700)/` and are returned as ISO 8601.
 
 | Tier | Tools |
 |---|---|
@@ -278,6 +278,7 @@ Known limits:
 
 - There is no URL inspection API for Bing. `bing_get_url_info` returns only basic index metadata.
 - `GetQueryStats` and `GetPageStats` take no date range; Bing returns a fixed recent window, by week. `start_date` / `end_date` only filter the returned rows.
+- In every stats tool, `data_range` is the first and last date of the rows returned (after the date filter) and `source_window` is the span of everything Bing sent. Dates must be real calendar dates, and `start_date` after `end_date` is an error.
 - Average positions are returned as Bing reports them. Third-party reports say they may be scaled by 10.
 - From Cloudflare Workers, Bing may answer `ThrottleIP` because Workers share egress IPs (reported by another project, not verified here). The tools say so when it happens; run the Node or stdio entry from your own machine if it persists.
 - Only API-key auth is supported. Bing's OAuth 2.0 (`webmaster.read` / `webmaster.manage`) is a possible follow-up.
