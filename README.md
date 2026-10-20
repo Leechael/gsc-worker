@@ -236,6 +236,7 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `BING_API_KEY` | all | secret | | Bing Webmaster Tools API key; enables the `bing_*` tools ([details](#bing-webmaster-tools)) |
 | `INDEXNOW_KEY` | all | secret | | IndexNow key; enables the `indexnow_*` tools ([details](#indexnow)) |
 | `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
+| `INDEXNOW_HOSTS` | all | var | | Hosts whose key file `indexnow_check_key_file` may fetch, comma-separated (e.g. `example.com,www.example.com`); the host of an absolute `INDEXNOW_KEY_LOCATION` is always allowed |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -300,10 +301,12 @@ export INDEXNOW_KEY=...                   # Node / stdio
 
 | Tier | Tools |
 |---|---|
-| read | `indexnow_check_key_file` (fetches your key file and checks it holds the key; contacts no search engine) |
+| read | `indexnow_check_key_file` (fetches your key file over https and checks it holds the key; contacts no search engine) |
 | write | `indexnow_submit_urls` (up to 10,000 URLs per call, all on one host) |
 
-Submissions go to `https://api.indexnow.org/indexnow` as `{host, key, keyLocation, urlList}`; the host is taken from the URLs. HTTP 200 means received and 202 means received with key validation pending; neither means indexed. 403 means the key file was not found or does not match, 422 means URLs outside the host or a malformed key, and 429 means too many submissions. Avoid resubmitting unchanged URLs.
+`indexnow_check_key_file` only contacts hosts you allowed: those listed in `INDEXNOW_HOSTS`, plus the host of an absolute `INDEXNOW_KEY_LOCATION`. Any other host is refused without a request, so the key (which is part of the default file name) is never sent to a host a caller picks. The check always uses https, follows redirects only to https on the same host (at most 3), reads at most 64 KiB, and gives up after 30 seconds.
+
+Submissions go to `https://api.indexnow.org/indexnow` as `{host, key, urlList}`, plus `keyLocation` when `INDEXNOW_KEY_LOCATION` is set (a path is resolved to `https://<host><path>`); the host is taken from the URLs. HTTP 200 means received and 202 means received with key validation pending; neither means indexed. 403 means the key file was not found or does not match, 422 means URLs outside the host or a malformed key, and 429 means too many submissions. Avoid resubmitting unchanged URLs.
 
 ## Development
 

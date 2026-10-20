@@ -61,4 +61,5 @@
   //   INDEXNOW_KEY                             your IndexNow key; host it at https://<host>/<key>.txt
   //                                            npx wrangler secret put INDEXNOW_KEY
   //   (optional var INDEXNOW_KEY_LOCATION: key file URL, or a path such as /keys/indexnow.txt)
+  //   (optional var INDEXNOW_HOSTS: hosts indexnow_check_key_file may fetch, e.g. "example.com,www.example.com")
 }

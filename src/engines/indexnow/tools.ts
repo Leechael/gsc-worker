@@ -1,14 +1,26 @@
 /**
  * IndexNow MCP tools (indexnow_*). Registered only when INDEXNOW_KEY is set.
  * indexnow_submit_urls needs the write tier (GSC_SCOPES=full);
- * indexnow_check_key_file is read-only and only fetches your own key file.
+ * indexnow_check_key_file is read-only and only fetches the key file on a host
+ * the operator allowed (INDEXNOW_HOSTS, or the host of an absolute
+ * INDEXNOW_KEY_LOCATION).
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../../mcp/context.js';
 import { errorResult, jsonError, jsonResult } from '../../tools/helpers.js';
-import { engineTierGate, parseHttpUrl, type EngineToolInfo } from '../types.js';
-import { INDEXNOW_ENDPOINT, INDEXNOW_MAX_URLS, IndexNowClient, planSubmission, resolveKeyLocation, type IndexNowConfig } from './client.js';
+import { engineTierGate, parseHttpUrl, redactSecret, type EngineToolInfo } from '../types.js';
+import {
+  INDEXNOW_ENDPOINT,
+  INDEXNOW_MAX_URLS,
+  IndexNowClient,
+  allowedKeyFileHosts,
+  planSubmission,
+  resolveKeyLocation,
+  type IndexNowConfig,
+} from './client.js';
+
+const mask = (text: string, key: string) => redactSecret(text, key).split('***').join('<INDEXNOW_KEY>');
 
 export const INDEXNOW_LABEL = 'IndexNow';
 
@@ -35,16 +47,16 @@ export function registerIndexNowTools(server: McpServer, svc: ServerServices, cf
       const gate = engineTierGate(svc.config.scopeTier, 'indexnow_submit_urls', 'write', INDEXNOW_LABEL);
       if (gate) return errorResult(gate);
       const plan = planSubmission(urls, cfg);
-      if (!plan.ok) return errorResult(`Error: ${plan.error}`);
+      if (!plan.ok) return errorResult(`Error: ${redactSecret(plan.error, cfg.key)}`);
       const outcome = await client.submit(plan);
       const result = {
         host: plan.host,
         submitted: plan.urlList.length,
-        key_file: plan.keyFileUrl.replace(cfg.key, '<INDEXNOW_KEY>'),
+        key_file: mask(plan.keyFileUrl, cfg.key),
         http_status: outcome.status,
-        message: outcome.message,
+        message: redactSecret(outcome.message, cfg.key),
       };
-      return outcome.ok ? jsonResult(result) : errorResult(`Error: ${outcome.message}`);
+      return outcome.ok ? jsonResult(result) : errorResult(`Error: ${result.message}`);
     },
   );
 
@@ -53,27 +65,42 @@ export function registerIndexNowTools(server: McpServer, svc: ServerServices, cf
     {
       title: 'IndexNow: check key file',
       description:
-        'Check that the IndexNow key file for a site is publicly reachable and contains INDEXNOW_KEY. ' +
-        'Fetches only that file on your site; contacts no search engine. Run it before the first indexnow_submit_urls.',
+        'Check that the IndexNow key file for a site is publicly reachable over https and contains INDEXNOW_KEY. ' +
+        'Only hosts the operator allowed (INDEXNOW_HOSTS, or the host of an absolute INDEXNOW_KEY_LOCATION) are contacted; ' +
+        'contacts no search engine. Run it before the first indexnow_submit_urls.',
       inputSchema: z.object({
-        site_url: z.string().min(1).describe('Any absolute URL on the host to check, e.g. "https://example.com/".'),
+        site_url: z.string().min(1).describe('Any absolute URL on an allowed host, e.g. "https://example.com/".'),
       }),
     },
     async ({ site_url }) => {
       const sample = parseHttpUrl(site_url);
-      if (!sample) return errorResult('Error: site_url must be an absolute http(s) URL.');
+      if (!sample) return errorResult('Error: site_url must be an absolute http(s) URL without credentials.');
+      const host = sample.host.toLowerCase();
+      const allowed = allowedKeyFileHosts(cfg);
+      if (!allowed.has(host)) {
+        const list = [...allowed].sort().join(', ');
+        return errorResult(
+          mask(
+            `Error: ${host} is not an allowed IndexNow host, so its key file is not fetched. ` +
+              (list ? `Allowed: ${list}. ` : 'No hosts are allowed yet. ') +
+              'Add it to INDEXNOW_HOSTS (comma-separated host names) in the server environment.',
+            cfg.key,
+          ),
+        );
+      }
       const loc = resolveKeyLocation(cfg, sample);
-      if (!loc.ok) return errorResult(`Error: ${loc.error}`);
-      if (new URL(loc.keyFileUrl).host.toLowerCase() !== sample.host.toLowerCase()) {
-        return errorResult(`Error: INDEXNOW_KEY_LOCATION points at another host (${new URL(loc.keyFileUrl).host}); the key file must be on ${sample.host}.`);
+      if (!loc.ok) return errorResult(`Error: ${mask(loc.error, cfg.key)}`);
+      const keyHost = new URL(loc.keyFileUrl).host.toLowerCase();
+      if (keyHost !== host) {
+        return errorResult(mask(`Error: INDEXNOW_KEY_LOCATION points at another host (${keyHost}); the key file must be on ${host}.`, cfg.key));
       }
       const check = await client.checkKeyFile(loc.keyFileUrl);
       const result = {
-        host: sample.host,
-        key_file: check.url.replace(cfg.key, '<INDEXNOW_KEY>'),
+        host,
+        key_file: mask(check.url, cfg.key),
         http_status: check.status,
         matches: check.matches,
-        message: check.message,
+        message: mask(check.message, cfg.key),
       };
       return check.matches ? jsonResult(result) : jsonError(result);
     },

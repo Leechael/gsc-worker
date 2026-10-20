@@ -9,7 +9,8 @@
  * 429 Too Many Requests.
  *
  * Web-standard fetch only (Workers-compatible). The key never appears in
- * errors or tool output.
+ * errors or tool output: every message built here passes through
+ * redactSecret().
  */
 import { parseHttpUrl, redactSecret } from '../types.js';
 
@@ -17,6 +18,11 @@ export const INDEXNOW_ENDPOINT = 'https://api.indexnow.org/indexnow';
 export const INDEXNOW_MAX_URLS = 10_000;
 /** 8-128 characters of a-z, A-Z, 0-9 and dashes. */
 export const INDEXNOW_KEY_PATTERN = /^[A-Za-z0-9-]{8,128}$/;
+
+/** The key-file check reads at most this many bytes (a key is at most 128 characters). */
+export const KEY_FILE_MAX_BYTES = 64 * 1024;
+/** Same-host https redirects the key-file check follows before giving up. */
+export const KEY_FILE_MAX_REDIRECTS = 3;
 
 export function isValidIndexNowKey(key: string): boolean {
   return INDEXNOW_KEY_PATTERN.test(key);
@@ -26,6 +32,37 @@ export interface IndexNowConfig {
   key: string;
   /** INDEXNOW_KEY_LOCATION: absolute URL, or a path resolved against each submission's host. */
   keyLocation?: string;
+  /** INDEXNOW_HOSTS: hosts (lowercase, optional :port) whose key file indexnow_check_key_file may fetch. */
+  hosts?: string[];
+}
+
+/** Parse INDEXNOW_HOSTS: comma- or space-separated host names; a full URL contributes its host. */
+export function parseHostList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const out = new Set<string>();
+  for (const part of raw.split(/[\s,]+/)) {
+    const v = part.trim().toLowerCase();
+    if (!v) continue;
+    const asUrl = parseHttpUrl(v.includes('://') ? v : `https://${v}`);
+    if (asUrl) out.add(asUrl.host);
+  }
+  return [...out];
+}
+
+/**
+ * Hosts the key-file check may contact: the INDEXNOW_HOSTS allowlist plus the
+ * host of an absolute INDEXNOW_KEY_LOCATION. Empty means the check is refused,
+ * so a caller can never point it (and the key in the default file name) at an
+ * arbitrary host.
+ */
+export function allowedKeyFileHosts(cfg: IndexNowConfig): Set<string> {
+  const hosts = new Set(cfg.hosts ?? []);
+  const raw = cfg.keyLocation?.trim();
+  if (raw && !raw.startsWith('/')) {
+    const u = parseHttpUrl(raw);
+    if (u) hosts.add(u.host.toLowerCase());
+  }
+  return hosts;
 }
 
 export type IndexNowPlan =
@@ -38,6 +75,12 @@ export type IndexNowPlan =
  * a non-root key file only covers URLs under its directory.
  */
 export function planSubmission(urls: readonly string[], cfg: IndexNowConfig): IndexNowPlan {
+  const plan = buildPlan(urls, cfg);
+  // Errors echo URLs, hosts and key-file paths, any of which may contain the key.
+  return plan.ok ? plan : { ok: false, error: redactSecret(plan.error, cfg.key) };
+}
+
+function buildPlan(urls: readonly string[], cfg: IndexNowConfig): IndexNowPlan {
   if (!isValidIndexNowKey(cfg.key)) {
     return { ok: false, error: 'INDEXNOW_KEY is not a valid IndexNow key: it must be 8-128 characters of a-z, A-Z, 0-9 and "-".' };
   }
@@ -54,7 +97,7 @@ export function planSubmission(urls: readonly string[], cfg: IndexNowConfig): In
     else invalid.push(u);
   }
   if (invalid.length > 0) {
-    return { ok: false, error: `Not absolute http(s) URLs: ${invalid.slice(0, 10).join(', ')}${invalid.length > 10 ? ', ...' : ''}` };
+    return { ok: false, error: `Not absolute http(s) URLs (or they carry credentials): ${invalid.slice(0, 10).join(', ')}${invalid.length > 10 ? ', ...' : ''}` };
   }
   const hosts = [...new Set(parsed.map((p) => p.host.toLowerCase()))];
   if (hosts.length > 1) {
@@ -93,9 +136,14 @@ export function planSubmission(urls: readonly string[], cfg: IndexNowConfig): In
 
 type KeyLocationResult = { ok: true; keyFileUrl: string; keyLocation?: string } | { ok: false; error: string };
 
-/** Where the key file is expected for URLs like `sample`. keyLocation is set only when it differs from the default root file. */
+/**
+ * Where the key file is expected for URLs like `sample`. The default file and
+ * a path location always resolve to https on the sample's host, whatever the
+ * sample's scheme. keyLocation is set only when it differs from the default
+ * root file.
+ */
 export function resolveKeyLocation(cfg: IndexNowConfig, sample: URL): KeyLocationResult {
-  const origin = `${sample.protocol}//${sample.host}`;
+  const origin = `https://${sample.host}`;
   const raw = cfg.keyLocation?.trim();
   if (!raw) return { ok: true, keyFileUrl: `${origin}/${cfg.key}.txt` };
   let url: URL | null;
@@ -105,7 +153,7 @@ export function resolveKeyLocation(cfg: IndexNowConfig, sample: URL): KeyLocatio
     url = parseHttpUrl(raw);
   }
   if (!url) {
-    return { ok: false, error: 'INDEXNOW_KEY_LOCATION must be an absolute http(s) URL or a path starting with "/".' };
+    return { ok: false, error: 'INDEXNOW_KEY_LOCATION must be an absolute http(s) URL (without credentials) or a path starting with "/".' };
   }
   return { ok: true, keyFileUrl: url.href, keyLocation: url.href };
 }
@@ -165,21 +213,59 @@ export class IndexNowClient {
     return { ok: false, status: res.status, message: base + detail };
   }
 
-  /** Fetch the key file and check that it holds the key. Never returns the file contents. */
+  /**
+   * Fetch the key file and check that it holds the key. Never returns the file
+   * contents. Only https is fetched; redirects are followed only to https on
+   * the same host (at most KEY_FILE_MAX_REDIRECTS); the body is capped at
+   * KEY_FILE_MAX_BYTES; one timeout covers the whole check. The caller decides
+   * which hosts may be contacted (see allowedKeyFileHosts).
+   */
   async checkKeyFile(keyFileUrl: string): Promise<{ url: string; status: number | null; matches: boolean; message: string }> {
+    const fail = (url: string, status: number | null, message: string) => ({
+      url: this.redact(url),
+      status,
+      matches: false,
+      message: this.redact(message),
+    });
+    let url = parseHttpUrl(keyFileUrl);
+    if (!url || url.protocol !== 'https:') return fail(keyFileUrl, null, 'The key file must be checked over https.');
+    const host = url.host.toLowerCase();
+    const signal = AbortSignal.timeout(this.timeoutMs);
     let res: Response;
     try {
-      res = await this.fetchImpl(keyFileUrl, { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(this.timeoutMs) });
+      for (let hops = 0; ; hops++) {
+        res = await this.fetchImpl(url.href, { method: 'GET', redirect: 'manual', signal });
+        if (res.status < 300 || res.status >= 400 || !res.headers.get('location')) break;
+        await res.body?.cancel().catch(() => undefined);
+        const next = parseHttpUrl(new URL(res.headers.get('location')!, url).href);
+        if (!next || next.protocol !== 'https:' || next.host.toLowerCase() !== host) {
+          return fail(url.href, res.status, `The key file redirects (HTTP ${res.status}) away from https://${host}; redirects to another host or to http are not followed. Serve the key file directly on ${host}.`);
+        }
+        if (hops >= KEY_FILE_MAX_REDIRECTS) {
+          return fail(url.href, res.status, `The key file redirected more than ${KEY_FILE_MAX_REDIRECTS} times.`);
+        }
+        url = next;
+      }
     } catch (e) {
-      return { url: keyFileUrl, status: null, matches: false, message: this.redact(`Could not fetch the key file: ${describe(e, this.timeoutMs)}`) };
+      return fail(url.href, null, `Could not fetch the key file: ${describe(e, this.timeoutMs)}`);
     }
     if (res.status !== 200) {
-      return { url: keyFileUrl, status: res.status, matches: false, message: `The key file answered HTTP ${res.status}; it must be publicly reachable with HTTP 200.` };
+      await res.body?.cancel().catch(() => undefined);
+      return fail(url.href, res.status, `The key file answered HTTP ${res.status}; it must be publicly reachable with HTTP 200.`);
     }
-    const content = (await res.text().catch(() => '')).replace(/^\uFEFF/, '').trim();
+    let content: string;
+    try {
+      const body = await readCapped(res, KEY_FILE_MAX_BYTES);
+      if (body === null) {
+        return fail(url.href, 200, `The key file is larger than ${KEY_FILE_MAX_BYTES} bytes; it should hold only the key.`);
+      }
+      content = body.replace(/^\uFEFF/, '').trim();
+    } catch (e) {
+      return fail(url.href, 200, `Could not read the key file: ${describe(e, this.timeoutMs)}`);
+    }
     const matches = content === this.key;
     return {
-      url: keyFileUrl,
+      url: this.redact(url.href),
       status: 200,
       matches,
       message: matches
@@ -191,6 +277,36 @@ export class IndexNowClient {
   private redact(text: string): string {
     return redactSecret(text, this.key);
   }
+}
+
+/** Read a response body as UTF-8, or null when it exceeds maxBytes (the rest is not downloaded). */
+async function readCapped(res: Response, maxBytes: number): Promise<string | null> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    all.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
 }
 
 function describe(e: unknown, timeoutMs: number): string {
