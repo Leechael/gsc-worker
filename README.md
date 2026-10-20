@@ -234,6 +234,8 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `GSC_DATA_STATE` | all | var | `all` | `all` (matches the GSC UI) or `final` |
 | `GSC_SKIP_OAUTH` | all | var | | Accepted for compatibility with mcp-gsc and ignored (no service accounts) |
 | `BING_API_KEY` | all | secret | | Bing Webmaster Tools API key; enables the `bing_*` tools ([details](#bing-webmaster-tools)) |
+| `INDEXNOW_KEY` | all | secret | | IndexNow key; enables the `indexnow_*` tools ([details](#indexnow)) |
+| `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
@@ -282,6 +284,26 @@ Known limits:
 - Average positions are returned as Bing reports them. Third-party reports say they may be scaled by 10.
 - From Cloudflare Workers, Bing may answer `ThrottleIP` because Workers share egress IPs (reported by another project, not verified here). The tools say so when it happens; run the Node or stdio entry from your own machine if it persists.
 - Only API-key auth is supported. Bing's OAuth 2.0 (`webmaster.read` / `webmaster.manage`) is a possible follow-up.
+
+### IndexNow
+
+[IndexNow](https://www.indexnow.org/documentation) tells search engines that URLs were added, updated or deleted. A submission to one participating engine is shared with the others (Bing, Yandex, Seznam, Naver, Yep and more; Google does not take part). It needs no console account, only a key file on your site.
+
+1. Generate a key: 8-128 characters of `a-z`, `A-Z`, `0-9` and `-`, for example `uuidgen | tr -d -` or `openssl rand -hex 16`.
+2. Host a UTF-8 text file containing only the key at `https://<host>/<key>.txt` on every host you will submit for. To use another path, set `INDEXNOW_KEY_LOCATION` (a path like `/keys/indexnow.txt` applies to every host; a key file outside the root only covers URLs under its directory).
+3. Set the key as a secret:
+
+```bash
+npx wrangler secret put INDEXNOW_KEY      # Workers
+export INDEXNOW_KEY=...                   # Node / stdio
+```
+
+| Tier | Tools |
+|---|---|
+| read | `indexnow_check_key_file` (fetches your key file and checks it holds the key; contacts no search engine) |
+| write | `indexnow_submit_urls` (up to 10,000 URLs per call, all on one host) |
+
+Submissions go to `https://api.indexnow.org/indexnow` as `{host, key, keyLocation, urlList}`; the host is taken from the URLs. HTTP 200 means received and 202 means received with key validation pending; neither means indexed. 403 means the key file was not found or does not match, 422 means URLs outside the host or a malformed key, and 429 means too many submissions. Avoid resubmitting unchanged URLs.
 
 ## Development
 

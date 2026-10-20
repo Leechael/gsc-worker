@@ -58,4 +58,7 @@
   // Optional search engines (tools appear only when the secret is set):
   //   BING_API_KEY                             Bing Webmaster Tools > Settings > API access > Generate API Key
   //                                            npx wrangler secret put BING_API_KEY
+  //   INDEXNOW_KEY                             your IndexNow key; host it at https://<host>/<key>.txt
+  //                                            npx wrangler secret put INDEXNOW_KEY
+  //   (optional var INDEXNOW_KEY_LOCATION: key file URL, or a path such as /keys/indexnow.txt)
 }
