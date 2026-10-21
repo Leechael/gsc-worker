@@ -148,7 +148,8 @@ async function getSitemapDetails(
   try {
     const details = await svc.gsc.request<SitemapDetails>(sitemapsPath(siteUrl, sitemapUrl));
 
-    if (!details) {
+    // The client maps an empty success body to {}.
+    if (!details || Object.keys(details).length === 0) {
       return textResult(`No details found for sitemap ${sitemapUrl}.`);
     }
 
