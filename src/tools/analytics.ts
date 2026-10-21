@@ -4,6 +4,8 @@ import type { ServerServices } from '../mcp/context.js';
 import { DIMENSIONS, type Dimension } from '../lib/enums.js';
 import { lastNDays } from '../lib/dates.js';
 import { errorText, errorResult, jsonError, jsonResult } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 /** Python版 semantics, kept for M1; §9.2-4 决策后可能调整 (see plan). */
 const ROW_LIMIT_MAX = 500;
@@ -42,6 +44,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
   server.registerTool(
     'get_search_analytics',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_search_analytics'),
       title: 'Search analytics',
       description:
         'Get search analytics data (clicks, impressions, CTR, position) for a specific property. ' +

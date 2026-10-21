@@ -19,20 +19,22 @@ import {
   resolveKeyLocation,
   type IndexNowConfig,
 } from './client.js';
+import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 const mask = (text: string, key: string) => redactSecret(text, key).split('***').join('<INDEXNOW_KEY>');
 
 export const INDEXNOW_LABEL = 'IndexNow';
 
 export const INDEXNOW_TOOLS: readonly EngineToolInfo[] = [
-  { name: 'indexnow_check_key_file', tier: 'read', summary: 'Check that the IndexNow key file is hosted on a site' },
-  { name: 'indexnow_submit_urls', tier: 'write', summary: `Notify IndexNow engines (Bing, Yandex, Seznam, Naver, ...) of up to ${INDEXNOW_MAX_URLS} changed URLs on one host` },
+  { name: 'indexnow_check_key_file', tier: 'read', openWorld: true, summary: 'Check that the IndexNow key file is hosted on a site' },
+  { name: 'indexnow_submit_urls', tier: 'write', idempotent: false, openWorld: true, summary: `Notify IndexNow engines (Bing, Yandex, Seznam, Naver, ...) of up to ${INDEXNOW_MAX_URLS} changed URLs on one host` },
 ];
 
 export function registerIndexNowTools(server: McpServer, svc: ServerServices, cfg: IndexNowConfig, client: IndexNowClient): void {
   server.registerTool(
     'indexnow_submit_urls',
     {
+      annotations: toolAnnotations(INDEXNOW_TOOLS, 'indexnow_submit_urls'),
       title: 'IndexNow: submit URLs',
       description:
         `Notify search engines that URLs were added, updated or deleted, via IndexNow (${INDEXNOW_ENDPOINT}). ` +
@@ -63,6 +65,7 @@ export function registerIndexNowTools(server: McpServer, svc: ServerServices, cf
   server.registerTool(
     'indexnow_check_key_file',
     {
+      annotations: toolAnnotations(INDEXNOW_TOOLS, 'indexnow_check_key_file'),
       title: 'IndexNow: check key file',
       description:
         'Check that the IndexNow key file for a site is publicly reachable over https and contains INDEXNOW_KEY. ' +

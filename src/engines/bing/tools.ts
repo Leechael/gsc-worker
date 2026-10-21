@@ -9,6 +9,7 @@ import type { ServerServices } from '../../mcp/context.js';
 import { errorResult, jsonResult } from '../../tools/helpers.js';
 import { engineTierGate, parseHttpUrl, type EngineToolInfo } from '../types.js';
 import { BingApiError, BingClient, bingDay, bingIso, decodeCrawlIssues, isCalendarDate } from './client.js';
+import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 export const BING_LABEL = 'Bing Webmaster Tools';
 export const BING_SUBMIT_BATCH_MAX = 500;
@@ -24,9 +25,9 @@ export const BING_TOOLS: readonly EngineToolInfo[] = [
   { name: 'bing_get_link_counts', tier: 'read', summary: 'Site pages with inbound link counts, paged (GetLinkCounts)' },
   { name: 'bing_get_feeds', tier: 'read', summary: 'Submitted sitemaps and feeds (GetFeeds)' },
   { name: 'bing_get_url_submission_quota', tier: 'read', summary: 'Remaining URL submission quota (GetUrlSubmissionQuota)' },
-  { name: 'bing_submit_urls', tier: 'write', summary: `Submit up to ${BING_SUBMIT_BATCH_MAX} URLs for crawling (SubmitUrl / SubmitUrlBatch)` },
-  { name: 'bing_submit_feed', tier: 'write', summary: 'Submit a sitemap or feed (SubmitFeed)' },
-  { name: 'bing_remove_feed', tier: 'destructive', summary: 'Remove a submitted sitemap or feed (RemoveFeed)' },
+  { name: 'bing_submit_urls', tier: 'write', idempotent: false, summary: `Submit up to ${BING_SUBMIT_BATCH_MAX} URLs for crawling (SubmitUrl / SubmitUrlBatch)` },
+  { name: 'bing_submit_feed', tier: 'write', idempotent: true, summary: 'Submit a sitemap or feed (SubmitFeed)' },
+  { name: 'bing_remove_feed', tier: 'destructive', idempotent: true, summary: 'Remove a submitted sitemap or feed (RemoveFeed)' },
 ];
 
 const POSITION_NOTE =
@@ -223,6 +224,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_list_sites',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_list_sites'),
       title: 'Bing: list sites',
       description: 'List the sites in the Bing Webmaster Tools account that owns BING_API_KEY, with verification status. Start here to get the exact site_url for other bing_* tools.',
       inputSchema: z.object({}),
@@ -255,6 +257,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_query_stats',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_query_stats'),
       title: 'Bing: query stats',
       description:
         'Top Bing search queries for a site with clicks, impressions, CTR and average positions (GetQueryStats). ' +
@@ -275,6 +278,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_page_stats',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_page_stats'),
       title: 'Bing: page stats',
       description:
         'Top pages of a site in Bing search with clicks, impressions, CTR and average positions (GetPageStats). ' +
@@ -295,6 +299,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_traffic_stats',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_traffic_stats'),
       title: 'Bing: traffic stats',
       description:
         'Daily Bing clicks and impressions for the whole site (GetRankAndTrafficStats), oldest first, with totals. ' +
@@ -335,6 +340,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_crawl_stats',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_crawl_stats'),
       title: 'Bing: crawl stats',
       description: 'Daily Bingbot crawl statistics for a site (GetCrawlStats): pages crawled, crawl errors, pages in index, inbound links, HTTP status counts.',
       inputSchema: z.object({
@@ -383,6 +389,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_crawl_issues',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_crawl_issues'),
       title: 'Bing: crawl issues',
       description:
         'URLs on a site where Bingbot hit crawl issues (GetCrawlIssues), with the HTTP code, decoded issue flags ' +
@@ -425,6 +432,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_url_info',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_url_info'),
       title: 'Bing: URL info',
       description:
         'Basic Bing index details for one URL (GetUrlInfo): HTTP status, size, anchor count, child URLs, discovery and last-crawl dates. ' +
@@ -458,6 +466,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_link_counts',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_link_counts'),
       title: 'Bing: inbound link counts',
       description: 'Pages of the site that have inbound links, with link counts (GetLinkCounts). Results are paged; start at page 0.',
       inputSchema: z.object({
@@ -486,6 +495,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_feeds',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_feeds'),
       title: 'Bing: sitemaps and feeds',
       description: 'Top-level sitemaps and feeds submitted for a site in Bing Webmaster Tools (GetFeeds), with status, URL count and dates.',
       inputSchema: z.object({ site_url: siteUrlSchema }),
@@ -516,6 +526,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_get_url_submission_quota',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_get_url_submission_quota'),
       title: 'Bing: URL submission quota',
       description: 'Remaining daily and monthly URL submission quota for a site (GetUrlSubmissionQuota). Check it before bing_submit_urls.',
       inputSchema: z.object({ site_url: siteUrlSchema }),
@@ -533,6 +544,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_submit_urls',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_submit_urls'),
       title: 'Bing: submit URLs',
       description:
         `Submit up to ${BING_SUBMIT_BATCH_MAX} URLs of a verified site to Bing for crawling (SubmitUrl for one, SubmitUrlBatch for several). ` +
@@ -576,6 +588,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_submit_feed',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_submit_feed'),
       title: 'Bing: submit sitemap/feed',
       description: 'Submit a sitemap or feed for a site to Bing Webmaster Tools (SubmitFeed). Requires GSC_SCOPES=full.',
       inputSchema: z.object(feedShape),
@@ -596,6 +609,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
   server.registerTool(
     'bing_remove_feed',
     {
+      annotations: toolAnnotations(BING_TOOLS, 'bing_remove_feed'),
       title: 'Bing: remove sitemap/feed',
       description: 'Remove a submitted sitemap or feed from Bing Webmaster Tools (RemoveFeed). Requires GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true.',
       inputSchema: z.object(feedShape),

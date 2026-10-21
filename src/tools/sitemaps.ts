@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
 import { errorText, errorResult, textResult, tierGateMessage, formatDateTime } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 interface SitemapContent {
   type?: string;
@@ -256,6 +258,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'get_sitemaps',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_sitemaps'),
       title: 'Get sitemaps',
       description: 'List all sitemaps for a specific Search Console property.',
       inputSchema: z.object({
@@ -268,6 +271,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'list_sitemaps_enhanced',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'list_sitemaps_enhanced'),
       title: 'List sitemaps (enhanced)',
       description:
         'List all sitemaps for a specific Search Console property with detailed information.',
@@ -285,6 +289,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'get_sitemap_details',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_sitemap_details'),
       title: 'Get sitemap details',
       description: 'Get detailed information about a specific sitemap.',
       inputSchema: z.object({
@@ -299,6 +304,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'submit_sitemap',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'submit_sitemap'),
       title: 'Submit sitemap',
       description: 'Submit a new sitemap or resubmit an existing one to Google.',
       inputSchema: z.object({
@@ -313,6 +319,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'delete_sitemap',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'delete_sitemap'),
       title: 'Delete sitemap',
       description: 'Delete (unsubmit) a sitemap from Google Search Console.',
       inputSchema: z.object({
@@ -327,6 +334,7 @@ export function registerSitemapsTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'manage_sitemaps',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'manage_sitemaps'),
       title: 'Manage sitemaps',
       description: 'All-in-one tool to manage sitemaps (list, get details, submit, delete).',
       inputSchema: z.object({

@@ -19,6 +19,7 @@ import {
   type YandexClientOptions,
   type YandexHost,
 } from './client.js';
+import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 export const YANDEX_LABEL = 'Yandex Webmaster';
 
@@ -53,9 +54,9 @@ export const YANDEX_TOOLS: readonly EngineToolInfo[] = [
   { name: 'yandex_get_recrawl_quota', tier: 'read', summary: 'Daily recrawl quota and remainder (recrawl/quota)' },
   { name: 'yandex_list_recrawl_tasks', tier: 'read', summary: 'Recrawl requests and their state (recrawl/queue)' },
   { name: 'yandex_get_recrawl_task', tier: 'read', summary: 'State of one recrawl request (recrawl/queue/{task-id})' },
-  { name: 'yandex_add_sitemap', tier: 'write', summary: 'Add a sitemap URL (POST user-added-sitemaps)' },
-  { name: 'yandex_recrawl_url', tier: 'write', summary: 'Send a URL for recrawl; uses the daily quota (POST recrawl/queue)' },
-  { name: 'yandex_delete_sitemap', tier: 'destructive', summary: 'Remove a sitemap added in Webmaster (DELETE user-added-sitemaps/{sitemap-id})' },
+  { name: 'yandex_add_sitemap', tier: 'write', idempotent: true, summary: 'Add a sitemap URL (POST user-added-sitemaps)' },
+  { name: 'yandex_recrawl_url', tier: 'write', idempotent: false, summary: 'Send a URL for recrawl; uses the daily quota (POST recrawl/queue)' },
+  { name: 'yandex_delete_sitemap', tier: 'destructive', idempotent: true, summary: 'Remove a sitemap added in Webmaster (DELETE user-added-sitemaps/{sitemap-id})' },
 ];
 
 const yandexGate = (tier: ScopeTier, tool: string, required: 'write' | 'destructive') => engineTierGate(tier, tool, required, YANDEX_LABEL);
@@ -154,6 +155,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_list_hosts',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_list_hosts'),
       title: 'Yandex: list sites',
       description: 'List the sites in the Yandex Webmaster account with their host_id (needed by the other yandex_* tools), verification state and main mirror.',
       inputSchema: z.object({}),
@@ -167,6 +169,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_host',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_host'),
       title: 'Yandex: site information',
       description: 'Site information from Yandex Webmaster: URLs, verification, main mirror, host_data_status (NOT_INDEXED, NOT_LOADED, OK) and display name.',
       inputSchema: z.object({ host: hostArg }),
@@ -180,6 +183,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_host_summary',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_host_summary'),
       title: 'Yandex: site statistics',
       description: 'Site summary: SQI (site quality index), pages in search, excluded pages, and site problems grouped by severity (FATAL, CRITICAL, POSSIBLE_PROBLEM, RECOMMENDATION).',
       inputSchema: z.object({ host: hostArg }),
@@ -198,6 +202,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_popular_queries',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_popular_queries'),
       title: 'Yandex: popular search queries',
       description:
         'Top search queries the site was shown for in Yandex (from the TOP-3000; last week unless dates are given), ordered by shows or clicks. ' +
@@ -237,6 +242,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_queries_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_queries_history'),
       title: 'Yandex: history for all queries',
       description: 'Daily history of indicators summed over all search queries (shows, clicks, average positions). Last week unless dates are given.',
       inputSchema: z.object({ host: hostArg, query_indicators: indicatorsArg, device_type: deviceArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -252,6 +258,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_query_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_query_history'),
       title: 'Yandex: history for one query',
       description: 'Daily indicator history for one search query, by query_id from yandex_get_popular_queries. Last week unless dates are given.',
       inputSchema: z.object({
@@ -278,6 +285,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_indexing_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_indexing_history'),
       title: 'Yandex: crawl (indexing) history',
       description: 'Pages downloaded by the Yandex robot over time, grouped by HTTP status class (HTTP_2XX, HTTP_3XX, HTTP_4XX, HTTP_5XX, OTHER). Current day unless dates are given.',
       inputSchema: z.object({ host: hostArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -290,6 +298,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_indexing_samples',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_indexing_samples'),
       title: 'Yandex: downloaded page samples',
       description: 'Examples of pages the Yandex robot downloaded (up to 50,000 URLs), with status, HTTP code and crawl date.',
       inputSchema: z.object({ host: hostArg, offset: offsetArg, limit: limitArg(100, 50) }),
@@ -303,6 +312,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_in_search_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_in_search_history'),
       title: 'Yandex: pages in search over time',
       description: 'Number of the site\'s pages in Yandex search results over time. Current day unless dates are given.',
       inputSchema: z.object({ host: hostArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -316,6 +326,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_in_search_samples',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_in_search_samples'),
       title: 'Yandex: pages in search',
       description: 'URLs of pages included in Yandex search results (up to 50,000), with title and the date of the version in search.',
       inputSchema: z.object({ host: hostArg, offset: offsetArg, limit: limitArg(100, 50) }),
@@ -329,6 +340,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_search_events_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_search_events_history'),
       title: 'Yandex: pages added to / removed from search over time',
       description: 'Counts of pages that appeared in (APPEARED_IN_SEARCH) or were removed from (REMOVED_FROM_SEARCH) Yandex search over time. Current day unless dates are given.',
       inputSchema: z.object({ host: hostArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -341,6 +353,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_search_events_samples',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_search_events_samples'),
       title: 'Yandex: pages added to / removed from search',
       description: 'Examples of pages that appeared in or were removed from Yandex search (up to 50,000), with the exclusion reason (excluded_url_status) and target_url for redirects, canonicals and duplicates.',
       inputSchema: z.object({ host: hostArg, offset: offsetArg, limit: limitArg(100, 50) }),
@@ -354,6 +367,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_diagnostics',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_diagnostics'),
       title: 'Yandex: site diagnostics',
       description: 'Site problems found by Yandex (e.g. NO_SITEMAPS, SSL_CERTIFICATE_ERROR) with severity, state (PRESENT, ABSENT, UNDEFINED) and last state change. Present problems are listed first.',
       inputSchema: z.object({ host: hostArg, only_present: z.boolean().nullish().describe('Only return problems in state PRESENT (default false).') }),
@@ -379,6 +393,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_sqi_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_sqi_history'),
       title: 'Yandex: SQI history',
       description: 'History of the site quality index (SQI) over the past year.',
       inputSchema: z.object({ host: hostArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -393,6 +408,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_broken_internal_links',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_broken_internal_links'),
       title: 'Yandex: broken internal links',
       description: 'Examples of broken internal links (source and destination URL, discovery date), optionally filtered by reason.',
       inputSchema: z.object({
@@ -413,6 +429,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_broken_internal_links_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_broken_internal_links_history'),
       title: 'Yandex: broken internal links over time',
       description: 'History of the number of broken internal links, per reason. Current day unless dates are given.',
       inputSchema: z.object({ host: hostArg, date_from: dateArg('Start'), date_to: dateArg('End') }),
@@ -425,6 +442,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_external_links',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_external_links'),
       title: 'Yandex: external links',
       description: 'Examples of external links pointing to the site (source and destination URL, discovery date).',
       inputSchema: z.object({ host: hostArg, offset: offsetArg, limit: limitArg(100, 10) }),
@@ -438,6 +456,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_external_links_history',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_external_links_history'),
       title: 'Yandex: external links over time',
       description: 'History of the total number of known external links to the site (indicator LINKS_TOTAL_COUNT).',
       inputSchema: z.object({ host: hostArg }),
@@ -463,6 +482,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_list_sitemaps',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_list_sitemaps'),
       title: 'Yandex: sitemaps',
       description: 'Sitemap files Yandex knows for the site (from robots.txt, Yandex Webmaster, or sitemap indexes), with URL and error counts. Use parent_id to list the children of a sitemap index and from for paging.',
       inputSchema: z.object({
@@ -482,6 +502,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_sitemap',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_sitemap'),
       title: 'Yandex: sitemap details',
       description: 'Details for one sitemap file: type, last download, URL count, error count, child count and sources.',
       inputSchema: z.object({ host: hostArg, sitemap_id: sitemapIdArg }),
@@ -492,6 +513,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_list_user_sitemaps',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_list_user_sitemaps'),
       title: 'Yandex: sitemaps added in Webmaster',
       description: 'Sitemap files added by the user in Yandex Webmaster (the ones yandex_delete_sitemap can remove).',
       inputSchema: z.object({
@@ -512,6 +534,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_recrawl_quota',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_recrawl_quota'),
       title: 'Yandex: recrawl quota',
       description: 'Daily quota for sending pages to Yandex for recrawling, and how much of it is left.',
       inputSchema: z.object({ host: hostArg }),
@@ -528,6 +551,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_list_recrawl_tasks',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_list_recrawl_tasks'),
       title: 'Yandex: recrawl tasks',
       description: 'Recrawl requests for the site with their state (IN_PROGRESS, DONE, FAILED).',
       inputSchema: z.object({
@@ -548,6 +572,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_get_recrawl_task',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_get_recrawl_task'),
       title: 'Yandex: recrawl task status',
       description: 'State of one recrawl request (IN_PROGRESS, DONE, FAILED) by task_id from yandex_recrawl_url or yandex_list_recrawl_tasks.',
       inputSchema: z.object({ host: hostArg, task_id: z.string().min(1).describe('task_id of the recrawl request.') }),
@@ -560,6 +585,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_add_sitemap',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_add_sitemap'),
       title: 'Yandex: add a sitemap',
       description: 'Add a sitemap file URL to the site in Yandex Webmaster. Requires the write tier (GSC_SCOPES=full).',
       inputSchema: z.object({ host: hostArg, sitemap_url: z.string().url().describe('Absolute URL of the sitemap file.') }),
@@ -577,6 +603,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_recrawl_url',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_recrawl_url'),
       title: 'Yandex: send a page for recrawl',
       description:
         'Send one URL of the site to the Yandex recrawl queue. Uses the per-site daily quota (see yandex_get_recrawl_quota); returns task_id and quota_remainder. ' +
@@ -598,6 +625,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'yandex_delete_sitemap',
     {
+      annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_delete_sitemap'),
       title: 'Yandex: remove a sitemap',
       description:
         'Remove a sitemap that was added in Yandex Webmaster (sitemap_id from yandex_list_user_sitemaps). ' +

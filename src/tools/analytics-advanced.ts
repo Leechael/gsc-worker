@@ -12,6 +12,8 @@ import {
 } from '../lib/enums.js';
 import { isValidISODate, lastNDays } from '../lib/dates.js';
 import { errorText, errorResult, jsonError, jsonResult, textResult } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 /**
  * Advanced analytics tools, ported from the Python版 gsc_server.py
@@ -160,6 +162,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
   server.registerTool(
     'get_performance_overview',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_performance_overview'),
       title: 'Performance overview',
       description:
         'Get a performance overview for a specific property: total clicks/impressions/CTR/position ' +
@@ -229,6 +232,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
   server.registerTool(
     'get_advanced_search_analytics',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_advanced_search_analytics'),
       title: 'Advanced search analytics',
       description:
         'Get advanced search analytics data with sorting, filtering, hourly dataState, and automatic ' +
@@ -478,6 +482,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
   server.registerTool(
     'compare_search_periods',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'compare_search_periods'),
       title: 'Compare search periods',
       description:
         'Compare search analytics data between two time periods. Period 1 is the analyzed period and ' +
@@ -636,6 +641,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
   server.registerTool(
     'get_search_by_page_query',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_search_by_page_query'),
       title: 'Search queries for a page',
       description:
         'Get search analytics data for a specific page, broken down by query. ' +
