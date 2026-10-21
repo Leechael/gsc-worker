@@ -3,6 +3,8 @@ import type { ServerServices } from '../mcp/context.js';
 import { scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
 import { engineCapabilityLines } from '../engines/index.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 const AEO_GEO_BOUNDARY = `
 AEO/GEO CAPABILITY BOUNDARY:
@@ -30,6 +32,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
   server.registerTool(
     'get_capabilities',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_capabilities'),
       title: 'Capabilities & auth status',
       description:
         'Get a full list of available tools, current auth status, scope tier, and how to get started. ' +

@@ -9,12 +9,12 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { Config, ScopeTier } from '../lib/config.js';
 import type { ServerServices } from '../mcp/context.js';
 import { tierGateMessage } from '../tools/helpers.js';
+import type { ToolPolicy, ToolTier } from '../mcp/tool-annotations.js';
 
-export type EngineTier = 'read' | 'write' | 'destructive';
+export type EngineTier = ToolTier;
 
-export interface EngineToolInfo {
-  name: string;
-  tier: EngineTier;
+/** Tool table entry; also the source of the tool's MCP annotations. */
+export interface EngineToolInfo extends ToolPolicy {
   summary: string;
 }
 

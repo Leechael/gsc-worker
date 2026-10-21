@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
 import { errorText, errorResult, jsonResult, textResult, tierGateMessage } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 interface SiteListResponse {
   siteEntry?: { siteUrl?: string; permissionLevel?: string }[];
@@ -71,6 +73,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'list_properties',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'list_properties'),
       title: 'List GSC properties',
       description:
         'List all Google Search Console (GSC) properties and sites the account has access to. ' +
@@ -100,6 +103,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'add_site',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'add_site'),
       title: 'Add a GSC property',
       description:
         'Add a site to your Search Console properties. ' +
@@ -133,6 +137,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'delete_site',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'delete_site'),
       title: 'Remove a GSC property',
       description:
         'Remove a site from your Search Console properties. ' +
@@ -164,6 +169,7 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'get_site_details',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_site_details'),
       title: 'Get GSC property details',
       description:
         'Get detailed information about a specific Search Console property ' +

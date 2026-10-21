@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { Config } from '../lib/config.js';
 import type { ServerServices } from '../mcp/context.js';
 import { textResult } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 /**
  * get_creator_info + reauthenticate (plan §6.3: reauthenticate 返回操作指引，
@@ -12,6 +14,7 @@ export function registerAuthInfoTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'get_creator_info',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_creator_info'),
       title: 'Creator info',
       description: 'Information about the creator of the original mcp-gsc project.',
     },
@@ -33,6 +36,7 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
   server.registerTool(
     'reauthenticate',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'reauthenticate'),
       title: 'Re-authentication guidance',
       description:
         'How to re-authenticate with a different Google account or scope tier. ' +

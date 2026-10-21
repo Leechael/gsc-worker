@@ -13,6 +13,7 @@ import { errorResult, jsonResult } from '../../tools/helpers.js';
 import { engineTierGate, type EngineToolInfo } from '../types.js';
 import { SEZNAM_LIMITS, SeznamApiError, SeznamWebmasterClient, type SeznamClientOptions, type SeznamResult } from './client.js';
 import { parseSeznamSites, selectSite, type SeznamSite } from './sites.js';
+import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 const KEY_HELP =
   'Generate a key in Seznam Webmaster (https://reporter.seznam.cz/wm/): open the site, go to the API section and create an access key ' +
@@ -28,7 +29,7 @@ export const SEZNAM_TOOLS: readonly EngineToolInfo[] = [
   { name: 'seznam_get_documents', tier: 'read', summary: 'Index counts and sample URLs by category (GET /web/documents)' },
   { name: 'seznam_get_documents_history', tier: 'read', summary: 'Daily index counts by category (GET /web/documents-history)' },
   { name: 'seznam_get_document', tier: 'read', summary: 'Index and crawl detail for one URL (GET /web/document)' },
-  { name: 'seznam_reindex_url', tier: 'write', summary: 'Ask Seznam to recrawl one URL; 500 per site per day; key needs write rights (POST /web/document/reindex)' },
+  { name: 'seznam_reindex_url', tier: 'write', idempotent: false, summary: 'Ask Seznam to recrawl one URL; 500 per site per day; key needs write rights (POST /web/document/reindex)' },
 ];
 
 const NO_DATA =
@@ -142,6 +143,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_list_sites',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_list_sites'),
       title: 'Seznam: configured sites',
       description: 'List the Seznam Webmaster sites this server has API keys for (labels only; keys are never shown). Use the label as `site` in the other seznam_* tools.',
       inputSchema: z.object({}),
@@ -157,6 +159,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_get_site',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_get_site'),
       title: 'Seznam: site overview',
       description:
         'Everything Seznam Webmaster currently has for the site (GET /web): page counts per category (doc_count: known to the robot, content: downloaded, ' +
@@ -182,6 +185,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_get_documents',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_get_documents'),
       title: 'Seznam: page counts and URL samples',
       description:
         'Current page counts per category with a random sample of up to 1,000 URLs each (GET /web/documents). ' +
@@ -202,6 +206,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_get_documents_history',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_get_documents_history'),
       title: 'Seznam: page count history',
       description:
         'Daily page counts over time (GET /web/documents-history): error, doc_count (known to the robot), content (downloaded, content known), ' +
@@ -224,6 +229,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_get_document',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_get_document'),
       title: 'Seznam: one page',
       description:
         'What Seznam knows about one URL (GET /web/document): whether it is indexed, an error or a redirect, title, meta tags, Open Graph data, ' +
@@ -253,6 +259,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
   server.registerTool(
     'seznam_reindex_url',
     {
+      annotations: toolAnnotations(SEZNAM_TOOLS, 'seznam_reindex_url'),
       title: 'Seznam: request reindexing',
       description:
         'Ask Seznam to reindex one URL (POST /web/document/reindex). Needs a key with write rights; Seznam allows at most 500 reindex requests a day. ' +
