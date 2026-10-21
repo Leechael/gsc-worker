@@ -1,7 +1,8 @@
 /**
  * GSC API enums, centralized and aligned with the discovery document
- * (revision 20261017). When Google adds values, update here and the
- * discovery-drift CI check will flag the diff.
+ * (last checked against revision 20261020). `npm run discovery-check`
+ * compares these lists with the live document and exits non-zero on drift;
+ * it is a manual check, not wired into CI.
  */
 
 /** searchAnalytics `type` values (searchType is deprecated — plan §1.5-8). */
