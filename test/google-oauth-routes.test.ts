@@ -138,7 +138,7 @@ test('start redirects to Google with offline access, consent, scope, state and S
   assert.equal(p.get('client_id'), 'client-id.apps.googleusercontent.com');
   assert.equal(p.get('redirect_uri'), `https://${HOST}/auth/google/callback`);
   assert.equal(p.get('access_type'), 'offline');
-  assert.equal(p.get('prompt'), 'consent');
+  assert.equal(p.get('prompt'), 'consent select_account');
   assert.equal(p.get('response_type'), 'code');
   assert.equal(p.get('code_challenge_method'), 'S256');
   assert.deepEqual(p.get('scope')!.split(' '), [GOOGLE_SCOPE_READONLY, 'openid', 'email']);
@@ -213,7 +213,8 @@ test('callback exchanges the code with the PKCE verifier and stores the token en
   assert.equal(exchange.body.get('redirect_uri'), `https://${HOST}/auth/google/callback`);
   assert.match(exchange.body.get('code_verifier') ?? '', /^[\w-]{43}$/);
 
-  const raw = kv.data.get(KV_KEYS.refreshToken)!;
+  // Stored under the account's own key, since Google returned its email.
+  const raw = kv.data.get(KV_KEYS.account('ada@example.com'))!;
   assert.ok(raw && !raw.includes('new-refresh'));
   assert.equal(kv.data.has(KV_KEYS.oauthState(state)), false, 'state consumed');
 

@@ -98,13 +98,17 @@ test('status() reads KV at most once per 30s unless fresh is requested', async (
   kv.get = async (key: string) => { reads++; return realGet(key); };
   const c = clock();
   const provider = new TokenProvider(google, tokenEndpoint().fetchImpl, { store: new GoogleTokenStore(kv, KEY), now: c.now });
-  for (let i = 0; i < 5; i++) await provider.status();
-  assert.equal(reads, 1);
+  await provider.status();
+  // One account-list read (legacy key + index) per snapshot.
+  const perRead = reads;
+  assert.ok(perRead >= 1);
+  for (let i = 0; i < 4; i++) await provider.status();
+  assert.equal(reads, perRead);
   c.advance(30_000);
   await provider.status();
-  assert.equal(reads, 2);
+  assert.equal(reads, 2 * perRead);
   await provider.status({ fresh: true });
-  assert.equal(reads, 3);
+  assert.equal(reads, 3 * perRead);
 });
 
 test('a stored token issued to another OAuth client is refused with an actionable message', async () => {

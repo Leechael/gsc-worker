@@ -1,4 +1,5 @@
 import { TokenProvider, TokenRefreshError } from './auth.js';
+import { PropertyRouter, siteUrlOfRequest, type AccountSites, type SiteEntry } from './account-router.js';
 
 /** Base URL for the Search Console API (plan §1.5: 统一用新基址). */
 export const GSC_BASE_URL = 'https://searchconsole.googleapis.com';
@@ -28,6 +29,12 @@ export interface GscRequestOptions {
   method?: 'GET' | 'POST' | 'DELETE' | 'PUT';
   query?: Record<string, string | null | undefined>;
   body?: unknown;
+  /**
+   * Google account to use (an id from TokenProvider.accountIds()). When
+   * omitted and several accounts are connected, the account is chosen by the
+   * property the request is about.
+   */
+  account?: string;
 }
 
 export interface GscClientOptions {
@@ -65,6 +72,8 @@ export class GscClient {
   private readonly timeoutMs: number;
   private readonly maxRetryAfterMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  /** Property → account routing; only consulted when several accounts are connected. */
+  readonly router: PropertyRouter;
 
   constructor(private readonly opts: GscClientOptions) {
     // See TokenProvider: bare `fetch` as a default breaks on workerd.
@@ -73,9 +82,57 @@ export class GscClient {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maxRetryAfterMs = opts.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.router = new PropertyRouter({
+      accountIds: () => opts.tokenProvider.accountIds(),
+      listSites: async (account) =>
+        (await this.send<{ siteEntry?: SiteEntry[] }>('/webmasters/v3/sites', {}, account)).siteEntry ?? [],
+    });
   }
 
+  /** Connected account ids, default first. */
+  accountIds(): Promise<string[]> {
+    return this.opts.tokenProvider.accountIds();
+  }
+
+  /** Every account's properties (for list_properties). `fresh` refreshes the routing map. */
+  sitesByAccount(opts: { fresh?: boolean } = {}): Promise<AccountSites[]> {
+    return this.router.sitesByAccount(opts);
+  }
+
+  /**
+   * Send a request as the right account. With one account (the usual case)
+   * this is a plain request. With several, a request about a property goes
+   * to the account with the highest permission on it; a 403 moves on to the
+   * next account that lists the property. Requests about no property, or a
+   * property no account lists, use the default account.
+   */
   async request<T>(path: string, options: GscRequestOptions = {}): Promise<T> {
+    const result = await this.routedRequest<T>(path, options);
+    // sites.add / sites.delete change which account lists the property.
+    if ((options.method === 'PUT' || options.method === 'DELETE') && /^\/webmasters\/v3\/sites\/[^/]+$/.test(path)) {
+      this.router.invalidate();
+    }
+    return result;
+  }
+
+  private async routedRequest<T>(path: string, options: GscRequestOptions): Promise<T> {
+    if (options.account !== undefined) return this.send<T>(path, options, options.account);
+    const ids = await this.opts.tokenProvider.accountIds();
+    const site = ids.length > 1 ? siteUrlOfRequest(path, options.body) : null;
+    const candidates = site === null ? [] : await this.router.candidates(site);
+    if (candidates.length === 0) return this.send<T>(path, options, undefined);
+    for (let i = 0; ; i++) {
+      try {
+        return await this.send<T>(path, options, candidates[i]);
+      } catch (e) {
+        if (!(e instanceof GscApiError && e.status === 403) || i >= candidates.length - 1) throw e;
+        // Permissions changed since the map was built.
+        this.router.invalidate();
+      }
+    }
+  }
+
+  private async send<T>(path: string, options: GscRequestOptions, account: string | undefined): Promise<T> {
     const { method = 'GET', query, body } = options;
     const url = new URL(`${GSC_BASE_URL}${path}`);
     for (const [k, v] of Object.entries(query ?? {})) {
@@ -85,7 +142,7 @@ export class GscClient {
     // Used in error messages; the query string is left out on purpose.
     const endpoint = `${method} ${path}`;
 
-    let accessToken = await this.opts.tokenProvider.getAccessToken();
+    let accessToken = await this.opts.tokenProvider.getAccessToken(account);
     // A cached access token can be revoked before it expires (disconnect or
     // re-authorization in another isolate); retry once with a fresh one.
     let retriedUnauthorized = false;
@@ -117,8 +174,8 @@ export class GscClient {
       if (res.status === 401 && !retriedUnauthorized) {
         retriedUnauthorized = true;
         await res.body?.cancel();
-        this.opts.tokenProvider.invalidateAccessToken();
-        accessToken = await this.opts.tokenProvider.getAccessToken();
+        this.opts.tokenProvider.invalidateAccessToken(account);
+        accessToken = await this.opts.tokenProvider.getAccessToken(account);
         attempt--;
         continue;
       }

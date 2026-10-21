@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
+import { PERMISSION_RANK } from '../lib/account-router.js';
 import { errorText, errorResult, jsonResult, textResult, tierGateMessage } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
@@ -69,6 +70,57 @@ function siteMutationError(e: unknown, action: 'adding' | 'removing', siteUrl: s
   return `Error ${action} site: ${e instanceof Error ? e.message : String(e)}`;
 }
 
+/**
+ * Account for a call that must not be routed automatically (add_site: no
+ * account lists the property yet). With one account, none is needed.
+ */
+async function chooseAccount(
+  svc: ServerServices,
+  requested: string | null,
+): Promise<{ ok: true; account: string | undefined } | { ok: false; error: string }> {
+  const ids = await svc.gsc.accountIds();
+  if (requested === null || requested.trim() === '') {
+    if (ids.length <= 1) return { ok: true, account: undefined };
+    return {
+      ok: false,
+      error: `Error: Several Google accounts are connected; pass account to choose one. Connected accounts: ${ids.join(', ')}.`,
+    };
+  }
+  const id = requested.trim().toLowerCase();
+  if (ids.includes(id)) return { ok: true, account: id };
+  return { ok: false, error: `Error: Google account '${requested}' is not connected. Connected accounts: ${ids.join(', ') || 'none'}.` };
+}
+
+/** list_properties across several accounts: one entry per property, best permission first. */
+async function mergedProperties(svc: ServerServices): Promise<Record<string, unknown>> {
+  const byAccount = await svc.gsc.sitesByAccount({ fresh: true });
+  const merged = new Map<string, { account: string; permission_level: string }[]>();
+  for (const a of byAccount) {
+    for (const site of a.sites ?? []) {
+      const list = merged.get(site.siteUrl) ?? [];
+      list.push({ account: a.account, permission_level: site.permissionLevel });
+      merged.set(site.siteUrl, list);
+    }
+  }
+  const failed = byAccount.filter((a) => a.sites === null);
+  if (merged.size === 0 && failed.length === byAccount.length && failed[0]) {
+    throw new Error(failed.map((a) => `${a.account}: ${a.error}`).join('; '));
+  }
+  const properties = [...merged].map(([siteUrl, access]) => {
+    access.sort((x, y) => (PERMISSION_RANK[y.permission_level] ?? 0) - (PERMISSION_RANK[x.permission_level] ?? 0));
+    return { site_url: siteUrl, permission_level: access[0]!.permission_level, accounts: access };
+  });
+  return {
+    count: properties.length,
+    properties,
+    accounts: byAccount.map((a) => ({
+      account: a.account,
+      properties: a.sites?.length ?? null,
+      ...(a.error ? { error: a.error } : {}),
+    })),
+  };
+}
+
 export function registerPropertiesTools(server: McpServer, svc: ServerServices): void {
   server.registerTool(
     'list_properties',
@@ -77,11 +129,13 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
       title: 'List GSC properties',
       description:
         'List all Google Search Console (GSC) properties and sites the account has access to. ' +
+        'With several connected Google accounts, properties are merged and each lists the accounts that can access it. ' +
         'Always call this first to get the exact site_url needed for other tools.',
       inputSchema: z.object({}),
     },
     async () => {
       try {
+        if ((await svc.gsc.accountIds()).length > 1) return jsonResult(await mergedProperties(svc));
         const data = await svc.gsc.request<SiteListResponse>('/webmasters/v3/sites');
         const sites = data.siteEntry ?? [];
         if (sites.length === 0) {
@@ -113,16 +167,22 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
         site_url: z.string().describe(
           'The URL of the site to add (must be exact match e.g. https://example.com, or https://www.example.com, or https://subdomain.example.com/path/, for domain properties use format: sc-domain:example.com)',
         ),
+        account: z.string().nullish().describe(
+          'Google account (email) to add the site to. Required when several Google accounts are connected; ' +
+            'get_capabilities lists them. Explicit null means omitted.',
+        ),
       }),
     },
-    async ({ site_url }) => {
+    async ({ site_url, account }) => {
       const gate = tierGateMessage(svc.config.scopeTier, 'add_site', 'destructive');
       if (gate !== null) return errorResult(gate);
+      const chosen = await chooseAccount(svc, account ?? null);
+      if (!chosen.ok) return errorResult(chosen.error);
       try {
         // sites.add is a PUT and returns an empty body on success (review P1-3).
         await svc.gsc.request<void>(
           `/webmasters/v3/sites/${encodeURIComponent(site_url)}`,
-          { method: 'PUT' },
+          { method: 'PUT', ...(chosen.account !== undefined ? { account: chosen.account } : {}) },
         );
         return textResult(`Site ${site_url} has been added to Search Console.`);
       } catch (e) {

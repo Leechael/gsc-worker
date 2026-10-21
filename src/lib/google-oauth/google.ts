@@ -4,8 +4,9 @@ import { base64Decode } from './crypto.js';
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+export const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 
-/** Lets the success/status pages show which Google account was authorized. */
+/** Identifies the authorized Google account: its email keys the stored token. */
 const IDENTITY_SCOPES = ['openid', 'email'];
 
 export function buildAuthorizationUrl(opts: {
@@ -21,8 +22,9 @@ export function buildAuthorizationUrl(opts: {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', [...opts.scopes, ...IDENTITY_SCOPES].join(' '));
   url.searchParams.set('access_type', 'offline');
-  // Forces a refresh token even when the account already granted this client.
-  url.searchParams.set('prompt', 'consent');
+  // consent forces a refresh token even when the account already granted this
+  // client; select_account shows the account chooser so another account can be added.
+  url.searchParams.set('prompt', 'consent select_account');
   url.searchParams.set('state', opts.state);
   url.searchParams.set('code_challenge', opts.codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');
@@ -31,6 +33,8 @@ export function buildAuthorizationUrl(opts: {
 
 export interface CodeExchangeResult {
   refreshToken: string | null;
+  /** Short-lived; only used to look up the email when the ID token has none. */
+  accessToken: string | null;
   scope: string;
   email: string | null;
 }
@@ -77,6 +81,7 @@ export async function exchangeAuthorizationCode(
   }
   const data = (await res.json().catch(() => null)) as {
     refresh_token?: string;
+    access_token?: string;
     scope?: string;
     id_token?: string;
     error?: string;
@@ -88,6 +93,7 @@ export async function exchangeAuthorizationCode(
   }
   return {
     refreshToken: data.refresh_token ?? null,
+    accessToken: data.access_token ?? null,
     scope: data.scope ?? opts.requestedScopes.join(' '),
     email: data.id_token ? emailFromIdToken(data.id_token) : null,
   };
@@ -104,6 +110,21 @@ export function emailFromIdToken(idToken: string): string | null {
   try {
     const claims = JSON.parse(new TextDecoder().decode(base64Decode(payload))) as { email?: unknown };
     return typeof claims.email === 'string' && claims.email ? claims.email : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Email of the account behind an access token (OIDC userinfo); null when unavailable. */
+export async function fetchUserEmail(fetchImpl: typeof fetch, accessToken: string): Promise<string | null> {
+  try {
+    const res = await fetchImpl(GOOGLE_USERINFO_URL, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { email?: unknown } | null;
+    return typeof data?.email === 'string' && data.email ? data.email : null;
   } catch {
     return null;
   }

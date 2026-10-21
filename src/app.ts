@@ -48,6 +48,11 @@ export function buildApp(entry: Exclude<EntryKind, 'stdio'>): ReturnType<typeof 
       google_token_configured: status.configured,
       google_token_available: status.configured && status.error === null,
       google_token_source: status.source,
+      // Counts only: /health is unauthenticated, so account emails stay out of it.
+      google_accounts: {
+        total: status.accounts.length,
+        available: status.accounts.filter((a) => a.available).length,
+      },
       ...(errors.length === 0 ? {} : { error: 'invalid configuration' }),
     });
   });
