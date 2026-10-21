@@ -373,6 +373,7 @@ npm install
 npm run typecheck
 npm test                 # node:test via tsx
 npm run deploy:dry-run   # bundle the Worker without uploading
+npm run discovery-check  # compare src/lib/enums.ts with Google's API discovery document
 ```
 
 `npx wrangler dev` runs the Worker locally with a local KV simulation. Note that it rewrites the Host header to the hostname in `routes`, so keep that hostname in `MCP_ALLOWED_HOSTS`.
