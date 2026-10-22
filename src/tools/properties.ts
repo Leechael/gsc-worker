@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
-import { PERMISSION_RANK } from '../lib/account-router.js';
+import { PERMISSION_RANK, sameProperty } from '../lib/account-router.js';
 import { errorText, errorResult, jsonResult, textResult, tierGateMessage } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
@@ -97,9 +97,10 @@ async function mergedProperties(svc: ServerServices): Promise<Record<string, unk
   const merged = new Map<string, { account: string; permission_level: string }[]>();
   for (const a of byAccount) {
     for (const site of a.sites ?? []) {
-      const list = merged.get(site.siteUrl) ?? [];
+      const key = [...merged.keys()].find((k) => sameProperty(k, site.siteUrl)) ?? site.siteUrl;
+      const list = merged.get(key) ?? [];
       list.push({ account: a.account, permission_level: site.permissionLevel });
-      merged.set(site.siteUrl, list);
+      merged.set(key, list);
     }
   }
   const failed = byAccount.filter((a) => a.sites === null);

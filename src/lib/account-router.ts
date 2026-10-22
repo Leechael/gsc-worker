@@ -3,9 +3,13 @@
  *
  * Each account's sites.list is fetched once and kept for ROUTING_TTL_MS (or
  * until the set of accounts changes, or invalidate() is called after an
- * authorization change or a 403). For a property, accounts are tried from
- * the highest permission level down.
+ * authorization change or a 403). The caller-supplied site URL is resolved
+ * to one listed property (exact identity, then bare-domain fallback) before
+ * accounts are ranked; see resolveSiteUrl. For that property, accounts are
+ * tried from the highest permission level down.
  */
+
+import { AmbiguousPropertyError, resolveSiteUrl, sameProperty, type ResolveSiteUrlResult } from './site-url.js';
 
 export interface SiteEntry {
   siteUrl?: string;
@@ -75,17 +79,29 @@ export class PropertyRouter {
   }
 
   /**
-   * Accounts that list `siteUrl`, best permission first (ties keep account
-   * order). Empty when no account lists it.
+   * Resolve a caller-supplied site URL against every account's listed
+   * properties, then rank accounts on that exact property.
+   */
+  async resolve(siteUrl: string): Promise<ResolvedProperty> {
+    const byAccount = await this.sitesByAccount();
+    const listed: string[] = [];
+    for (const a of byAccount) {
+      for (const s of a.sites ?? []) listed.push(s.siteUrl);
+    }
+    const match = resolveSiteUrl(siteUrl, listed);
+    if (match.status !== 'resolved') return match;
+    return { status: 'resolved', siteUrl: match.siteUrl, accounts: rankAccounts(byAccount, match.siteUrl) };
+  }
+
+  /**
+   * Accounts that list the resolved property, best permission first (ties
+   * keep account order). Empty when the input matches no property. Throws
+   * AmbiguousPropertyError when several properties could apply.
    */
   async candidates(siteUrl: string): Promise<string[]> {
-    const ranked: { account: string; rank: number; order: number }[] = [];
-    (await this.sitesByAccount()).forEach((a, order) => {
-      const entry = a.sites?.find((s) => s.siteUrl === siteUrl);
-      if (entry) ranked.push({ account: a.account, rank: PERMISSION_RANK[entry.permissionLevel] ?? 0, order });
-    });
-    ranked.sort((x, y) => y.rank - x.rank || x.order - y.order);
-    return ranked.map((r) => r.account);
+    const result = await this.resolve(siteUrl);
+    if (result.status === 'ambiguous') throw new AmbiguousPropertyError(siteUrl, result.candidates);
+    return result.status === 'resolved' ? result.accounts : [];
   }
 
   private async build(ids: string[], signature: string): Promise<RoutingMap> {
@@ -133,3 +149,19 @@ export function siteUrlOfRequest(path: string, body: unknown): string | null {
   }
   return null;
 }
+
+export type ResolvedProperty =
+  | { status: 'resolved'; siteUrl: string; accounts: string[] }
+  | Exclude<ResolveSiteUrlResult, { status: 'resolved' }>;
+
+function rankAccounts(byAccount: AccountSites[], siteUrl: string): string[] {
+  const ranked: { account: string; rank: number; order: number }[] = [];
+  byAccount.forEach((a, order) => {
+    const entry = a.sites?.find((s) => sameProperty(s.siteUrl, siteUrl));
+    if (entry) ranked.push({ account: a.account, rank: PERMISSION_RANK[entry.permissionLevel] ?? 0, order });
+  });
+  ranked.sort((x, y) => y.rank - x.rank || x.order - y.order);
+  return ranked.map((r) => r.account);
+}
+
+export { AmbiguousPropertyError, sameProperty };

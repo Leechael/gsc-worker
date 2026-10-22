@@ -1,5 +1,6 @@
 import { TokenProvider, TokenRefreshError } from './auth.js';
-import { PropertyRouter, siteUrlOfRequest, type AccountSites, type SiteEntry } from './account-router.js';
+import { AmbiguousPropertyError, PropertyRouter, siteUrlOfRequest, type AccountSites, type SiteEntry } from './account-router.js';
+import { rewriteRequestSiteUrl } from './site-url.js';
 
 /** Base URL for the Search Console API (plan §1.5: 统一用新基址). */
 export const GSC_BASE_URL = 'https://searchconsole.googleapis.com';
@@ -101,10 +102,12 @@ export class GscClient {
 
   /**
    * Send a request as the right account. With one account (the usual case)
-   * this is a plain request. With several, a request about a property goes
-   * to the account with the highest permission on it; a 403 moves on to the
-   * next account that lists the property. Requests about no property, or a
-   * property no account lists, use the default account.
+   * this is a plain request. With several, the caller-supplied site URL is
+   * resolved to one listed property (exact identity, then bare-domain
+   * fallback); that property's highest-permission account is used, and a
+   * 403 moves on to the next account that lists the same property. Requests
+   * about no property, or a property no account lists, use the default
+   * account. An input that could refer to more than one property is refused.
    */
   async request<T>(path: string, options: GscRequestOptions = {}): Promise<T> {
     const result = await this.routedRequest<T>(path, options);
@@ -119,13 +122,22 @@ export class GscClient {
     if (options.account !== undefined) return this.send<T>(path, options, options.account);
     const ids = await this.opts.tokenProvider.accountIds();
     const site = ids.length > 1 ? siteUrlOfRequest(path, options.body) : null;
-    const candidates = site === null ? [] : await this.router.candidates(site);
-    if (candidates.length === 0) return this.send<T>(path, options, undefined);
+    if (site === null) return this.send<T>(path, options, undefined);
+    const resolved = await this.router.resolve(site);
+    if (resolved.status === 'ambiguous') {
+      throw new AmbiguousPropertyError(site, resolved.candidates);
+    }
+    if (resolved.status === 'not_found' || resolved.accounts.length === 0) {
+      return this.send<T>(path, options, undefined);
+    }
+    const rewritten = rewriteRequestSiteUrl(path, options.body, resolved.siteUrl);
+    const routed: GscRequestOptions = { ...options };
+    if (rewritten.body !== undefined) routed.body = rewritten.body;
     for (let i = 0; ; i++) {
       try {
-        return await this.send<T>(path, options, candidates[i]);
+        return await this.send<T>(rewritten.path, routed, resolved.accounts[i]);
       } catch (e) {
-        if (!(e instanceof GscApiError && e.status === 403) || i >= candidates.length - 1) throw e;
+        if (!(e instanceof GscApiError && e.status === 403) || i >= resolved.accounts.length - 1) throw e;
         // Permissions changed since the map was built.
         this.router.invalidate();
       }
@@ -261,4 +273,4 @@ function backoffMs(attempt: number): number {
 }
 
 /** Re-export for tools that want to narrow error handling. */
-export { TokenRefreshError };
+export { AmbiguousPropertyError, TokenRefreshError };

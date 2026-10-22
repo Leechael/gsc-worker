@@ -1,4 +1,4 @@
-import { GscApiError, TokenRefreshError } from '../lib/gsc-client.js';
+import { AmbiguousPropertyError, GscApiError, TokenRefreshError } from '../lib/gsc-client.js';
 import { siteNotFoundError } from '../lib/errors.js';
 import type { ScopeTier } from '../lib/config.js';
 
@@ -73,7 +73,7 @@ export function formatDateTime(raw: string | undefined | null): string | null {
 }
 
 export function errorText(prefix: string, e: unknown, siteUrl?: string): string {
-  if (e instanceof TokenRefreshError) {
+  if (e instanceof TokenRefreshError || e instanceof AmbiguousPropertyError) {
     return `Error: ${e.message}`;
   }
   if (e instanceof GscApiError) {

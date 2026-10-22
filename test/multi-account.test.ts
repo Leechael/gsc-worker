@@ -1,7 +1,7 @@
 /**
  * Several Google accounts per deployment: KV storage keyed by email, lazy
  * migration of the single-account record, per-account access tokens,
- * property → account routing (permission ranking, 403 fallback), merged
+ * property → account routing (exact property identity, permission ranking, 403 fallback), merged
  * list_properties, add_site account choice, and the admin routes.
  */
 import { test, afterEach } from 'node:test';
@@ -155,11 +155,16 @@ async function harness(opts: { sites: Record<string, Site[]>; deny?: string[]; e
     tokenFetch,
     { store },
   );
-  const calls: { path: string; token: string; method: string }[] = [];
+  const calls: { path: string; token: string; method: string; body: unknown }[] = [];
   const gscFetch = (async (input: unknown, init?: RequestInit) => {
     const url = new URL(String(input));
     const token = (init?.headers as Record<string, string>).Authorization!.replace('Bearer ', '');
-    calls.push({ path: decodeURIComponent(url.pathname), token, method: init?.method ?? 'GET' });
+    calls.push({
+      path: decodeURIComponent(url.pathname),
+      token,
+      method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    });
     if (url.pathname === '/webmasters/v3/sites') return Response.json({ siteEntry: opts.sites[token] ?? [] });
     if (opts.deny?.includes(token)) {
       return Response.json({ error: { code: 403, message: 'User does not have sufficient permission' } }, { status: 403 });
@@ -245,6 +250,163 @@ test('a property no account lists, or a request about no property, uses the defa
   const { gsc } = await harness({ sites: { 'at-rt-ada': [], 'at-rt-bob': [] } });
   const out = await gsc.request<{ servedBy: string }>(queryPath('https://unknown.example/'), { method: 'POST', body: {} });
   assert.equal(out.servedBy, 'at-rt-ada');
+});
+
+const EXAMPLE_PROPERTIES = {
+  domain: 'sc-domain:example.com',
+  httpsRoot: 'https://example.com/',
+  httpRoot: 'http://example.com/',
+  blog: 'https://example.com/blog/',
+  blogCased: 'https://example.com/Blog/',
+} as const;
+
+function exampleHarness() {
+  return harness({
+    sites: {
+      'at-rt-ada': [
+        { siteUrl: EXAMPLE_PROPERTIES.domain, permissionLevel: 'siteOwner' },
+        { siteUrl: EXAMPLE_PROPERTIES.httpsRoot, permissionLevel: 'siteRestrictedUser' },
+        { siteUrl: EXAMPLE_PROPERTIES.blogCased, permissionLevel: 'siteOwner' },
+      ],
+      'at-rt-bob': [
+        { siteUrl: EXAMPLE_PROPERTIES.httpsRoot, permissionLevel: 'siteOwner' },
+        { siteUrl: EXAMPLE_PROPERTIES.httpRoot, permissionLevel: 'siteOwner' },
+        { siteUrl: EXAMPLE_PROPERTIES.blog, permissionLevel: 'siteFullUser' },
+      ],
+    },
+  });
+}
+
+test('exact property identity wins over another property on the same host', async () => {
+  const { gsc, calls } = await exampleHarness();
+  const cases: [string, string, string][] = [
+    [EXAMPLE_PROPERTIES.domain, 'at-rt-ada', EXAMPLE_PROPERTIES.domain],
+    [EXAMPLE_PROPERTIES.httpsRoot, 'at-rt-bob', EXAMPLE_PROPERTIES.httpsRoot],
+    [EXAMPLE_PROPERTIES.httpRoot, 'at-rt-bob', EXAMPLE_PROPERTIES.httpRoot],
+    [EXAMPLE_PROPERTIES.blog, 'at-rt-bob', EXAMPLE_PROPERTIES.blog],
+    [EXAMPLE_PROPERTIES.blogCased, 'at-rt-ada', EXAMPLE_PROPERTIES.blogCased],
+  ];
+  for (const [site, token, resolved] of cases) {
+    calls.length = 0;
+    const out = await gsc.request<{ servedBy: string }>(queryPath(site), { method: 'POST', body: {} });
+    assert.equal(out.servedBy, token, site);
+    const query = calls.find((c) => c.path.endsWith('/searchAnalytics/query'));
+    assert.equal(query?.path, `/webmasters/v3/sites/${resolved}/searchAnalytics/query`, site);
+  }
+});
+
+test('a subdirectory property never collapses to the URL-prefix root', async () => {
+  const { gsc, calls } = await exampleHarness();
+  const out = await gsc.request<{ servedBy: string }>(queryPath('https://example.com/blog'), { method: 'POST', body: {} });
+  assert.equal(out.servedBy, 'at-rt-bob');
+  const query = calls.find((c) => c.path.endsWith('/searchAnalytics/query'));
+  assert.equal(query?.path, `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.blog}/searchAnalytics/query`);
+});
+
+test('host matching is case-insensitive and the listed path case is preserved', async () => {
+  const { gsc, calls } = await exampleHarness();
+  const root = await gsc.request<{ servedBy: string }>(queryPath('https://EXAMPLE.com/'), { method: 'POST', body: {} });
+  assert.equal(root.servedBy, 'at-rt-bob');
+  const blog = await gsc.request<{ servedBy: string }>(queryPath('https://example.com/Blog/'), { method: 'POST', body: {} });
+  assert.equal(blog.servedBy, 'at-rt-ada');
+  const queries = calls.filter((c) => c.path.endsWith('/searchAnalytics/query')).map((c) => c.path);
+  assert.deepEqual(queries, [
+    `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.httpsRoot}/searchAnalytics/query`,
+    `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.blogCased}/searchAnalytics/query`,
+  ]);
+});
+
+test('a bare domain uses sc-domain, then https root, then http root', async () => {
+  const { gsc, calls } = await exampleHarness();
+  const out = await gsc.request<{ servedBy: string }>(queryPath('example.com'), { method: 'POST', body: {} });
+  assert.equal(out.servedBy, 'at-rt-ada');
+  const query = calls.find((c) => c.path.endsWith('/searchAnalytics/query'));
+  assert.equal(query?.path, `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.domain}/searchAnalytics/query`);
+
+  const httpsOnly = await harness({
+    sites: {
+      'at-rt-ada': [{ siteUrl: EXAMPLE_PROPERTIES.httpsRoot, permissionLevel: 'siteOwner' }],
+      'at-rt-bob': [{ siteUrl: EXAMPLE_PROPERTIES.httpRoot, permissionLevel: 'siteOwner' }],
+    },
+  });
+  const httpsHit = await httpsOnly.gsc.request<{ servedBy: string }>(queryPath('EXAMPLE.com'), { method: 'POST', body: {} });
+  assert.equal(httpsHit.servedBy, 'at-rt-ada');
+
+  const httpOnly = await harness({
+    sites: {
+      'at-rt-ada': [{ siteUrl: EXAMPLE_PROPERTIES.blog, permissionLevel: 'siteOwner' }],
+      'at-rt-bob': [{ siteUrl: EXAMPLE_PROPERTIES.httpRoot, permissionLevel: 'siteOwner' }],
+    },
+  });
+  const httpHit = await httpOnly.gsc.request<{ servedBy: string }>(queryPath('example.com'), { method: 'POST', body: {} });
+  assert.equal(httpHit.servedBy, 'at-rt-bob');
+});
+
+test('an ambiguous site URL lists the candidate properties and does not guess', async () => {
+  const { gsc, calls } = await exampleHarness();
+  await assert.rejects(
+    () => gsc.request(queryPath('https://example.com/shop/'), { method: 'POST', body: {} }),
+    (e: unknown) => {
+      assert.equal((e as { name?: string }).name, 'AmbiguousPropertyError');
+      const message = (e as Error).message;
+      assert.match(message, /https:\/\/example\.com\/shop\//);
+      assert.match(message, /sc-domain:example\.com/);
+      assert.match(message, /https:\/\/example\.com\//);
+      assert.match(message, /http:\/\/example\.com\//);
+      assert.match(message, /https:\/\/example\.com\/blog\//);
+      assert.match(message, /https:\/\/example\.com\/Blog\//);
+      return true;
+    },
+  );
+  assert.equal(calls.filter((c) => c.path.endsWith('/searchAnalytics/query')).length, 0);
+
+  const subdirsOnly = await harness({
+    sites: {
+      'at-rt-ada': [{ siteUrl: EXAMPLE_PROPERTIES.blog, permissionLevel: 'siteOwner' }],
+      'at-rt-bob': [{ siteUrl: 'https://example.com/docs/', permissionLevel: 'siteOwner' }],
+    },
+  });
+  await assert.rejects(
+    () => subdirsOnly.gsc.request(queryPath('example.com'), { method: 'POST', body: {} }),
+    (e: unknown) => {
+      const message = (e as Error).message;
+      assert.match(message, /Ambiguous Search Console property 'example\.com'/);
+      assert.match(message, /https:\/\/example\.com\/blog\//);
+      assert.match(message, /https:\/\/example\.com\/docs\//);
+      return true;
+    },
+  );
+});
+
+test('routing a 403 fallback stays on the exact resolved property', async () => {
+  const { gsc, calls } = await harness({
+    sites: {
+      'at-rt-ada': [
+        { siteUrl: EXAMPLE_PROPERTIES.httpsRoot, permissionLevel: 'siteFullUser' },
+        { siteUrl: EXAMPLE_PROPERTIES.domain, permissionLevel: 'siteOwner' },
+      ],
+      'at-rt-bob': [{ siteUrl: EXAMPLE_PROPERTIES.httpsRoot, permissionLevel: 'siteOwner' }],
+    },
+    deny: ['at-rt-bob'],
+  });
+  const out = await gsc.request<{ servedBy: string }>(queryPath('https://EXAMPLE.com'), { method: 'POST', body: {} });
+  assert.equal(out.servedBy, 'at-rt-ada');
+  const queries = calls.filter((c) => c.path.endsWith('/searchAnalytics/query'));
+  assert.deepEqual(queries.map((c) => [c.token, c.path]), [
+    ['at-rt-bob', `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.httpsRoot}/searchAnalytics/query`],
+    ['at-rt-ada', `/webmasters/v3/sites/${EXAMPLE_PROPERTIES.httpsRoot}/searchAnalytics/query`],
+  ]);
+});
+
+test('inspection bodies are rewritten to the resolved property', async () => {
+  const { gsc, calls } = await exampleHarness();
+  const out = await gsc.request<{ servedBy: string }>('/v1/urlInspection/index:inspect', {
+    method: 'POST',
+    body: { inspectionUrl: 'https://example.com/page', siteUrl: 'example.com' },
+  });
+  assert.equal(out.servedBy, 'at-rt-ada');
+  const inspect = calls.find((c) => c.path === '/v1/urlInspection/index:inspect');
+  assert.deepEqual(inspect?.body, { inspectionUrl: 'https://example.com/page', siteUrl: EXAMPLE_PROPERTIES.domain });
 });
 
 test('with a single account no sites.list is made for routing', async () => {
