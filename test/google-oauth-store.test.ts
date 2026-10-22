@@ -103,7 +103,7 @@ test('stored refresh token is encrypted in KV and round-trips with metadata', as
   const kv = new MemoryKv();
   const store = new GoogleTokenStore(kv, KEY);
   await store.save('1//stored-refresh', { scope: GOOGLE_SCOPE_READONLY, clientId: 'cid', email: 'ada@example.com' });
-  const raw = kv.data.get(KV_KEYS.refreshToken)!;
+  const raw = kv.data.get(KV_KEYS.account('ada@example.com'))!;
   assert.ok(!raw.includes('stored-refresh'));
   const loaded = await store.loadRefreshToken();
   assert.equal(loaded?.refreshToken, '1//stored-refresh');

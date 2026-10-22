@@ -55,7 +55,8 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
   open https://<worker-host>/auth/google (check status at /auth/google/status).
 Only the deployment's operator can do this: it takes ${whoMay}. Anyone else gets 403,
 so if that is not you, ask the operator.
-The newly stored token replaces the previous one and takes precedence over GOOGLE_REFRESH_TOKEN.
+The new token replaces the stored token of the same Google account; signing in as another account adds it
+(tools then pick the account per property). Stored accounts take precedence over GOOGLE_REFRESH_TOKEN as the default.
 
 Otherwise this server uses credentials from its environment (no browser access here).
 To switch Google account or re-authorize at the current tier (${tier}), run locally:

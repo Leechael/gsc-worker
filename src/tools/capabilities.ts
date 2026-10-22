@@ -3,6 +3,8 @@ import type { ServerServices } from '../mcp/context.js';
 import { scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
 import { engineCapabilityLines } from '../engines/index.js';
+import type { AccountStatus } from '../lib/auth.js';
+import { GOOGLE_SCOPE_FULL } from '../lib/config.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
 
@@ -27,6 +29,19 @@ const TIER_TOOLS: Record<string, string[]> = {
   write: ['submit_sitemap', 'manage_sitemaps (action=submit)'],
   destructive: ['add_site', 'delete_site', 'delete_sitemap', 'manage_sitemaps (action=delete)'],
 };
+
+/** One line per connected Google account; never prints tokens. */
+function googleAccountLines(accounts: AccountStatus[]): string[] {
+  if (accounts.length === 0) return [];
+  const lines = [`GOOGLE ACCOUNTS (${accounts.length}; tools pick the account with the highest permission on each property):`];
+  for (const a of accounts) {
+    const name = a.source === 'env' ? 'GOOGLE_REFRESH_TOKEN (env)' : a.email ?? `${a.id} (stored before account emails were recorded)`;
+    const scope = a.stored ? (a.stored.scope.split(/\s+/).includes(GOOGLE_SCOPE_FULL) ? 'scope full' : 'scope readonly') : null;
+    const details = [a.source, scope, a.stored ? `added ${a.stored.storedAt}` : null].filter(Boolean).join(', ');
+    lines.push(`  - ${name} [${details}]: ${a.available ? 'available' : `unavailable: ${a.error ?? 'client not configured'}`}`);
+  }
+  return lines;
+}
 
 export function registerCapabilitiesTools(server: McpServer, svc: ServerServices): void {
   server.registerTool(
@@ -79,6 +94,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         'AUTH STATUS:',
         authStatus,
         `TOKEN SOURCE: ${tokenSource}`,
+        ...googleAccountLines(status.accounts),
         '',
         'GETTING STARTED:',
         '1. Fix auth if needed (see AUTH STATUS).',
