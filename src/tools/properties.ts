@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
 import { PERMISSION_RANK, sameProperty } from '../lib/account-router.js';
-import { errorText, errorResult, jsonResult, textResult, tierGateMessage } from './helpers.js';
+import { errorText, errorResult, jsonResult, textResult, tierGateMessage, accountCannotWriteResult } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
 
@@ -175,10 +175,12 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
       }),
     },
     async ({ site_url, account }) => {
-      const gate = tierGateMessage(svc.config.scopeTier, 'add_site', 'destructive');
-      if (gate !== null) return errorResult(gate);
+      const dest = tierGateMessage(svc.config.scopeTier, 'add_site', 'destructive');
+      if (dest !== null) return errorResult(dest);
       const chosen = await chooseAccount(svc, account ?? null);
       if (!chosen.ok) return errorResult(chosen.error);
+      const gate = await accountCannotWriteResult(svc, 'add_site', site_url, chosen.account ?? null);
+      if (gate) return gate;
       try {
         // sites.add is a PUT and returns an empty body on success (review P1-3).
         await svc.gsc.request<void>(
@@ -211,8 +213,10 @@ export function registerPropertiesTools(server: McpServer, svc: ServerServices):
       }),
     },
     async ({ site_url }) => {
-      const gate = tierGateMessage(svc.config.scopeTier, 'delete_site', 'destructive');
-      if (gate !== null) return errorResult(gate);
+      const dest = tierGateMessage(svc.config.scopeTier, 'delete_site', 'destructive');
+      if (dest !== null) return errorResult(dest);
+      const gate = await accountCannotWriteResult(svc, 'delete_site', site_url, null);
+      if (gate) return gate;
       try {
         await svc.gsc.request<unknown>(`/webmasters/v3/sites/${encodeURIComponent(site_url)}`, {
           method: 'DELETE',

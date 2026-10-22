@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { SignJWT, exportJWK } from 'jose';
-import { parseConfig, validateHttpConfig } from '../src/lib/config.js';
+import { GOOGLE_SCOPE_FULL, parseConfig, validateHttpConfig } from '../src/lib/config.js';
 import { buildAuthenticator } from '../src/lib/mcp-auth/index.js';
 import { buildCfAccessAuthenticator } from '../src/lib/mcp-auth/cf-access.js';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -92,7 +92,13 @@ test('add_site: PUT with empty success body is reported as success (P1-3)', asyn
     calls.push({ method: init?.method, path: String(input) });
     return Promise.resolve(new Response('', { status: 200 })); // empty body, like sites.add
   }) as typeof fetch;
-  const config = { ...parseConfig(), scopeTier: 'destructive', allowDestructive: true } as Config;
+  const parsed = parseConfig();
+  const config = {
+    ...parsed,
+    scopeTier: 'destructive' as const,
+    allowDestructive: true,
+    google: { ...parsed.google, scopes: [GOOGLE_SCOPE_FULL] },
+  } as Config;
   const svc = { config, tokenProvider, gsc: new GscClient({ tokenProvider, fetchImpl }) };
   const server = new McpServer({ name: 't', version: '0' });
   registerPropertiesTools(server, svc);

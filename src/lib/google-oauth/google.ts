@@ -35,7 +35,10 @@ export interface CodeExchangeResult {
   refreshToken: string | null;
   /** Short-lived; only used to look up the email when the ID token has none. */
   accessToken: string | null;
+  /** Effective scope: Google's `scope` or, when omitted, the requested scopes. */
   scope: string;
+  /** Scope string Google actually returned; null when the field was omitted. */
+  grantedScope: string | null;
   email: string | null;
 }
 
@@ -57,7 +60,7 @@ export async function exchangeAuthorizationCode(
     code: string;
     redirectUri: string;
     codeVerifier: string;
-    /** Recorded as the granted scope when Google omits `scope` (RFC 6749 §5.1: then it equals the request). */
+    /** Used as the effective scope when Google omits `scope` (RFC 6749 §5.1). */
     requestedScopes: string[];
   },
 ): Promise<CodeExchangeResult> {
@@ -95,6 +98,7 @@ export async function exchangeAuthorizationCode(
     refreshToken: data.refresh_token ?? null,
     accessToken: data.access_token ?? null,
     scope: data.scope ?? opts.requestedScopes.join(' '),
+    grantedScope: typeof data.scope === 'string' && data.scope !== '' ? data.scope : null,
     email: data.id_token ? emailFromIdToken(data.id_token) : null,
   };
 }
@@ -162,4 +166,9 @@ export function scopesCover(granted: string, required: string[]): boolean {
   return required.every(
     (s) => have.has(s) || (s === GOOGLE_SCOPE_READONLY && have.has(GOOGLE_SCOPE_FULL)),
   );
+}
+
+/** True when the grant includes the non-readonly webmasters scope. */
+export function hasWebmastersWriteScope(granted: string): boolean {
+  return granted.split(/\s+/).filter(Boolean).includes(GOOGLE_SCOPE_FULL);
 }

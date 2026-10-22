@@ -98,7 +98,7 @@ function gateCallsInSource(): Map<string, string> {
   };
   walk(join(import.meta.dirname, '..', 'src'));
   const gates = new Map<string, string>();
-  const re = /(?:tierGateMessage|engineTierGate|seznamTierGate|yandexGate)\(\s*[^,]+,\s*'([a-z_]+)',\s*'(write|destructive)'/g;
+  const re = /(?:tierGateMessage|engineTierGate|seznamTierGate|yandexGate|grantedWriteGate)\(\s*[^,]+,\s*'([a-z_]+)',\s*'(write|destructive)'/g;
   for (const file of files) {
     for (const m of readFileSync(file, 'utf8').matchAll(re)) gates.set(m[1]!, m[2]!);
   }

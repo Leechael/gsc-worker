@@ -217,6 +217,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     try {
       meta = await svc.tokenStore!.save(result.refreshToken, {
         scope: result.scope,
+        grantedScope: result.grantedScope,
         clientId: cfg.google.clientId!,
         ...(email ? { email } : {}),
       });
@@ -245,6 +246,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       ok: true,
       email: meta.email ?? null,
       scope: meta.scope,
+      granted_scope: meta.grantedScope ?? 'unknown',
       stored_at: meta.storedAt,
       connected_accounts: accounts.length,
     });
@@ -266,8 +268,12 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         ? {
             email: status.stored.email ?? null,
             scope: status.stored.scope,
+            granted_scope: status.stored.grantedScope ?? 'unknown',
             stored_at: status.stored.storedAt,
-            covers_required_scope: scopesCover(status.stored.scope, cfg.google.scopes),
+            covers_required_scope: scopesCover(
+              status.stored.grantedScope ?? cfg.google.scopes.join(' '),
+              cfg.google.scopes,
+            ),
             client_matches: status.stored.clientId === cfg.google.clientId,
           }
         : null,
@@ -394,8 +400,11 @@ function accountView(cfg: Config, a: AccountStatus): Record<string, unknown> {
     account: a.email ?? a.id,
     source: a.source,
     scope: a.stored?.scope ?? null,
+    granted_scope: a.stored?.grantedScope ?? 'unknown',
     added_at: a.stored?.storedAt ?? null,
-    covers_required_scope: a.stored ? scopesCover(a.stored.scope, cfg.google.scopes) : null,
+    covers_required_scope: a.stored
+      ? scopesCover(a.stored.grantedScope ?? cfg.google.scopes.join(' '), cfg.google.scopes)
+      : null,
     available: a.available,
     error: a.error,
   };

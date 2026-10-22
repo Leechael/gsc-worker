@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { McpServer } from '@modelcontextprotocol/server';
 import type { ZodType } from 'zod';
-import { parseConfig } from '../src/lib/config.js';
+import { GOOGLE_SCOPE_FULL, parseConfig } from '../src/lib/config.js';
 import { TokenProvider, TokenRefreshError } from '../src/lib/auth.js';
 import { GscClient } from '../src/lib/gsc-client.js';
 import type { ServerServices } from '../src/mcp/context.js';
@@ -207,14 +207,21 @@ test('manage_sitemaps submit and delete are refused at the read tier without cal
   svc.config.scopeTier = 'read';
   const server = new McpServer({ name: 't', version: '0' });
   registerSitemapsTools(server, svc);
-  for (const action of ['submit', 'delete']) {
-    const result = await toolsOf(server).manage_sitemaps!.executor(
-      { site_url: 'sc-domain:example.com', action, sitemap_url: 'https://example.com/sitemap.xml' },
-      {},
-    );
-    assert.equal(result.isError, true, action);
-    assert.match(result.content[0]!.text, new RegExp(`^Safety: ${action}_sitemap `), action);
-  }
+  const submit = await toolsOf(server).manage_sitemaps!.executor(
+    { site_url: 'sc-domain:example.com', action: 'submit', sitemap_url: 'https://example.com/sitemap.xml' },
+    {},
+  );
+  assert.equal(submit.isError, true);
+  const submitBody = JSON.parse(submit.content[0]!.text) as { error?: string; resolution?: string; granted_scope?: string };
+  assert.equal(submitBody.error, 'insufficient_granted_scope');
+  assert.equal(submitBody.granted_scope, 'unknown');
+  assert.match(submitBody.resolution ?? '', /GSC_SCOPES=full/);
+  const del = await toolsOf(server).manage_sitemaps!.executor(
+    { site_url: 'sc-domain:example.com', action: 'delete', sitemap_url: 'https://example.com/sitemap.xml' },
+    {},
+  );
+  assert.equal(del.isError, true);
+  assert.match(del.content[0]!.text, /^Safety: delete_sitemap /);
   assert.equal(calls.length, 0);
 });
 
@@ -288,8 +295,17 @@ function statusSvc(status: number, body: unknown, scopeTier: 'read' | 'destructi
     typeof body === 'string' ? body : JSON.stringify(body),
     { status },
   )) as typeof fetch;
+  const parsed = parseConfig();
   return {
-    config: { ...parseConfig(), scopeTier },
+    config: {
+      ...parsed,
+      scopeTier,
+      allowDestructive: scopeTier === 'destructive',
+      google: {
+        ...parsed.google,
+        scopes: scopeTier === 'destructive' ? [GOOGLE_SCOPE_FULL] : parsed.google.scopes,
+      },
+    },
     tokenProvider,
     gsc: new GscClient({ tokenProvider, fetchImpl, maxAttempts: 1 }),
   };
