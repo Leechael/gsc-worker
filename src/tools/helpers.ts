@@ -1,6 +1,8 @@
 import { AmbiguousPropertyError, GscApiError, TokenRefreshError } from '../lib/gsc-client.js';
 import { siteNotFoundError } from '../lib/errors.js';
-import type { ScopeTier } from '../lib/config.js';
+import { GOOGLE_SCOPE_FULL, type ScopeTier } from '../lib/config.js';
+import { hasWebmastersWriteScope } from '../lib/google-oauth/google.js';
+import type { ServerServices } from '../mcp/context.js';
 
 /** Successful text content. Empty datasets use this too — they are not failures. */
 export function textResult(text: string): { content: { type: 'text'; text: string }[] } {
@@ -58,6 +60,69 @@ export function tierGateMessage(tier: ScopeTier, tool: string, required: 'write'
     '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.\n' +
     workerHint
   );
+}
+
+type ToolErrorResult = { isError: true; content: { type: 'text'; text: string }[] };
+
+/**
+ * Write-tier check against the scope Google granted to the account that
+ * owns `siteUrl` (or `account` when the caller already chose one). Unknown
+ * granted scope falls back to GSC_SCOPES. Returns a structured error with
+ * a `resolution` field instead of passing Google's 403 through.
+ */
+export async function grantedWriteGate(
+  svc: ServerServices,
+  tool: string,
+  required: 'write',
+  siteUrl: string | null,
+  account?: string | null,
+): Promise<ToolErrorResult | null> {
+  return accountCannotWriteResult(svc, tool, siteUrl, account ?? null);
+}
+
+/** Same check as grantedWriteGate, for destructive tools that already have a deployment-level gate. */
+export async function accountCannotWriteResult(
+  svc: ServerServices,
+  tool: string,
+  siteUrl: string | null,
+  account: string | null,
+): Promise<ToolErrorResult | null> {
+  const ids = await svc.gsc.accountIds();
+  let accountId = account && account.trim() !== '' ? account.trim().toLowerCase() : null;
+  if (accountId === null && ids.length === 1) {
+    accountId = ids[0] ?? null;
+  }
+  if (accountId === null && siteUrl && ids.length > 1) {
+    const resolved = await svc.gsc.router.resolve(siteUrl);
+    if (resolved.status === 'ambiguous') {
+      return errorResult(`Error: ${new AmbiguousPropertyError(siteUrl, resolved.candidates).message}`);
+    }
+    if (resolved.status === 'resolved' && resolved.accounts[0]) {
+      accountId = resolved.accounts[0];
+    }
+  }
+  if (accountId === null) {
+    accountId = ids[0] ?? null;
+  }
+
+  const accounts = await svc.tokenProvider.accounts();
+  const chosen = accounts.find((a) => a.id === accountId) ?? accounts[0] ?? null;
+  const granted = chosen?.stored?.grantedScope ?? null;
+  const effective = granted ?? svc.config.google.scopes.join(' ');
+  if (hasWebmastersWriteScope(effective)) return null;
+
+  const name = chosen?.email ?? chosen?.id ?? accountId ?? 'the connected Google account';
+  return jsonError({
+    error: 'insufficient_granted_scope',
+    tool,
+    account: name,
+    granted_scope: granted ?? 'unknown',
+    required_scope: GOOGLE_SCOPE_FULL,
+    resolution:
+      `Re-authorize ${name} at /auth/google with GSC_SCOPES=full so Google grants the ` +
+      'webmasters (non-readonly) scope. Write tools use the scope Google actually granted ' +
+      'to that account.',
+  });
 }
 
 /**

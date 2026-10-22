@@ -333,6 +333,15 @@ export class TokenProvider {
       this.fail(accountId, msg, invalidGrant);
     }
 
+    if (typeof data.scope === 'string' && data.scope !== '' && this.store && accountId !== ENV_ACCOUNT_ID) {
+      try {
+        await this.store.updateGrantedScope(accountId, data.scope);
+        this.snapshot = null;
+      } catch {
+        // The access token is still usable; status will keep showing unknown.
+      }
+    }
+
     const expiresIn = data.expires_in ?? 3600;
     if (generation === this.generation) {
       this.cache.set(accountId, {

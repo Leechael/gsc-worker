@@ -84,10 +84,16 @@ test('Worker without MCP_ALLOWED_HOSTS warns once that every request will be rej
 
 interface RegisteredTool { executor: (args: unknown, ctx: unknown) => Promise<{ content: { text: string }[] }> }
 
-async function capabilities(env: Record<string, unknown>, stored?: { scope: string }): Promise<string> {
+async function capabilities(env: Record<string, unknown>, stored?: { scope: string; grantedScope?: string | null }): Promise<string> {
   const kv = new MemoryKv();
   const store = new GoogleTokenStore(kv, KEY);
-  if (stored) await store.save('stored-refresh', { scope: stored.scope, clientId: 'cid' });
+  if (stored) {
+    await store.save('stored-refresh', {
+      scope: stored.scope,
+      clientId: 'cid',
+      ...(stored.grantedScope ? { grantedScope: stored.grantedScope } : {}),
+    });
+  }
   setEnvSource(env);
   const config = parseConfig();
   const tokenProvider = new TokenProvider(config.google, undefined, { store: stored ? store : null });
@@ -101,9 +107,18 @@ async function capabilities(env: Record<string, unknown>, stored?: { scope: stri
 const CLIENT = { GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'sec' };
 
 test('get_capabilities flags a stored grant that does not cover GSC_SCOPES', async () => {
-  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full' }, { scope: GOOGLE_SCOPE_READONLY });
+  const text = await capabilities(
+    { ...CLIENT, GSC_SCOPES: 'full' },
+    { scope: GOOGLE_SCOPE_READONLY, grantedScope: GOOGLE_SCOPE_READONLY },
+  );
   assert.match(text, /does not cover the configured GSC_SCOPES/);
   assert.match(text, /\/auth\/google/);
+});
+
+test('get_capabilities treats a legacy record without granted scope as unknown', async () => {
+  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full' }, { scope: GOOGLE_SCOPE_READONLY });
+  assert.doesNotMatch(text, /does not cover the configured GSC_SCOPES/);
+  assert.match(text, /granted scope unknown/);
 });
 
 test('get_capabilities does not flag a stored full grant at the readonly tier', async () => {

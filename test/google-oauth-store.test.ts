@@ -108,6 +108,7 @@ test('stored refresh token is encrypted in KV and round-trips with metadata', as
   const loaded = await store.loadRefreshToken();
   assert.equal(loaded?.refreshToken, '1//stored-refresh');
   assert.equal(loaded?.meta.email, 'ada@example.com');
+  assert.equal(loaded?.meta.grantedScope, null, 'legacy save without grantedScope is unknown');
   assert.equal((await store.loadMeta())?.clientId, 'cid');
   await store.clear();
   assert.equal(await store.loadRefreshToken(), null);
@@ -230,6 +231,16 @@ test('scopesCover: full covers readonly, readonly does not cover full', () => {
   assert.equal(scopesCover(`openid ${GOOGLE_SCOPE_FULL}`, [GOOGLE_SCOPE_READONLY]), true);
   assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_FULL]), false);
   assert.equal(scopesCover('openid email', [GOOGLE_SCOPE_READONLY]), false);
+});
+
+test('updateGrantedScope writes the Google-returned scope without rotating the token', async () => {
+  const store = new GoogleTokenStore(new MemoryKv(), KEY);
+  await store.save('rt', { scope: GOOGLE_SCOPE_READONLY, clientId: 'cid', email: 'ada@example.com' });
+  await store.updateGrantedScope('ada@example.com', GOOGLE_SCOPE_FULL);
+  const loaded = await store.loadRefreshToken('ada@example.com');
+  assert.equal(loaded?.refreshToken, 'rt');
+  assert.equal(loaded?.meta.grantedScope, GOOGLE_SCOPE_FULL);
+  assert.equal(loaded?.meta.scope, GOOGLE_SCOPE_READONLY);
 });
 
 test('emailFromIdToken reads the email claim and tolerates junk', () => {

@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { GscApiError } from '../lib/gsc-client.js';
-import { errorText, errorResult, textResult, tierGateMessage, formatDateTime } from './helpers.js';
+import { errorText, errorResult, textResult, tierGateMessage, grantedWriteGate, accountCannotWriteResult, formatDateTime } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
 
@@ -187,8 +187,8 @@ async function submitSitemap(
   siteUrl: string,
   sitemapUrl: string,
 ) {
-  const gate = tierGateMessage(svc.config.scopeTier, 'submit_sitemap', 'write');
-  if (gate) return errorResult(gate);
+  const gate = await grantedWriteGate(svc, 'submit_sitemap', 'write', siteUrl);
+  if (gate) return gate;
   try {
     await svc.gsc.request(sitemapsPath(siteUrl, sitemapUrl), { method: 'PUT' });
 
@@ -225,8 +225,10 @@ async function deleteSitemap(
   siteUrl: string,
   sitemapUrl: string,
 ) {
-  const gate = tierGateMessage(svc.config.scopeTier, 'delete_sitemap', 'destructive');
-  if (gate) return errorResult(gate);
+  const dest = tierGateMessage(svc.config.scopeTier, 'delete_sitemap', 'destructive');
+  if (dest !== null) return errorResult(dest);
+  const gate = await accountCannotWriteResult(svc, 'delete_sitemap', siteUrl, null);
+  if (gate) return gate;
   try {
     // First check if the sitemap exists
     try {

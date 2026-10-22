@@ -452,7 +452,15 @@ test('list_properties merges all accounts and names the accounts per property', 
 
 test('add_site with several accounts requires an explicit account', async () => {
   const { svc, calls } = await harness({ sites: {} });
-  const destructive = { ...svc, config: { ...svc.config, scopeTier: 'destructive' as const, allowDestructive: true } };
+  const destructive = {
+    ...svc,
+    config: {
+      ...svc.config,
+      scopeTier: 'destructive' as const,
+      allowDestructive: true,
+      google: { ...svc.config.google, scopes: [GOOGLE_SCOPE_FULL] },
+    },
+  };
   const server = new McpServer({ name: 't', version: '0' });
   registerPropertiesTools(server, destructive);
   const tools = toolsOf(server);
@@ -520,13 +528,13 @@ test('GET /auth/google/accounts lists accounts without secrets', async () => {
   assert.equal(res.status, 200);
   const text = await res.text();
   assert.ok(!text.includes('secret'), 'no tokens');
-  const body = JSON.parse(text) as { count: number; accounts: { account: string; source: string; scope: string; added_at: string; available: boolean }[] };
+  const body = JSON.parse(text) as { count: number; accounts: { account: string; source: string; scope: string; granted_scope: string; added_at: string; available: boolean }[] };
   assert.equal(body.count, 2);
   assert.deepEqual(body.accounts.map((a) => [a.account, a.source, a.available]), [
     ['ada@example.com', 'kv', true],
     ['bob@example.com', 'kv', true],
   ]);
-  assert.ok(body.accounts.every((a) => a.scope === GOOGLE_SCOPE_FULL && a.added_at));
+  assert.ok(body.accounts.every((a) => a.scope === GOOGLE_SCOPE_FULL && a.granted_scope === 'unknown' && a.added_at));
   const html = await (await call('/auth/google/accounts', { headers: { accept: 'text/html' } })).text();
   assert.match(html, /Disconnect ada@example\.com/);
   assert.match(html, /Disconnect bob@example\.com/);

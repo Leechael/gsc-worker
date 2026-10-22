@@ -36,7 +36,13 @@ function googleAccountLines(accounts: AccountStatus[]): string[] {
   const lines = [`GOOGLE ACCOUNTS (${accounts.length}; tools pick the account with the highest permission on each property):`];
   for (const a of accounts) {
     const name = a.source === 'env' ? 'GOOGLE_REFRESH_TOKEN (env)' : a.email ?? `${a.id} (stored before account emails were recorded)`;
-    const scope = a.stored ? (a.stored.scope.split(/\s+/).includes(GOOGLE_SCOPE_FULL) ? 'scope full' : 'scope readonly') : null;
+    const granted = a.stored?.grantedScope;
+    const scope =
+      granted == null
+        ? 'granted scope unknown'
+        : granted.split(/\s+/).includes(GOOGLE_SCOPE_FULL)
+          ? 'granted scope full'
+          : 'granted scope readonly';
     const details = [a.source, scope, a.stored ? `added ${a.stored.storedAt}` : null].filter(Boolean).join(', ');
     lines.push(`  - ${name} [${details}]: ${a.available ? 'available' : `unavailable: ${a.error ?? 'client not configured'}`}`);
   }
@@ -74,10 +80,13 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       } else {
         authStatus = '✅ Credentials configured — ready to use all tools in the current scope tier.';
       }
-      if (status.source === 'kv' && status.stored && !scopesCover(status.stored.scope, svc.config.google.scopes)) {
-        authStatus +=
-          `\n⚠️ The stored grant (scope: ${status.stored.scope}) does not cover the configured GSC_SCOPES; ` +
-          'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+      if (status.source === 'kv' && status.stored) {
+        const granted = status.stored.grantedScope;
+        if (granted !== null && !scopesCover(granted, svc.config.google.scopes)) {
+          authStatus +=
+            `\n⚠️ The granted scope (${granted}) does not cover the configured GSC_SCOPES; ` +
+            'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+        }
       }
       const tokenSource = {
         kv: `kv (authorized in-Worker via /auth/google${status.stored ? `, stored ${status.stored.storedAt}` : ''}${status.stored?.email ? `, account ${status.stored.email}` : ''})`,

@@ -272,7 +272,11 @@ test('callback accepts a token response that omits scope (RFC 6749: same as requ
   mockGoogle({ token: () => Response.json({ refresh_token: 'r', access_token: 'at' }) });
   const res = await call(`/auth/google/callback?code=c&state=${state}`);
   assert.equal(res.status, 200, await res.clone().text());
-  assert.equal((await store.loadMeta())?.scope, GOOGLE_SCOPE_READONLY);
+  const meta = await store.loadMeta();
+  assert.equal(meta?.scope, GOOGLE_SCOPE_READONLY);
+  assert.equal(meta?.grantedScope, null);
+  const status = await (await call('/auth/google/status')).json() as { stored: { granted_scope: string } };
+  assert.equal(status.stored.granted_scope, 'unknown');
 });
 
 test('callback answers 503 with a retry hint when KV cannot store the token', async () => {

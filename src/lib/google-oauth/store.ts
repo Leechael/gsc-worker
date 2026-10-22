@@ -49,6 +49,12 @@ export function accountIdFor(email: string): string {
 /** Non-secret metadata stored next to the encrypted refresh token. */
 export interface StoredTokenMeta {
   scope: string;
+  /**
+   * Scope string Google returned on the token response. null when the record
+   * predates granted-scope tracking (or Google omitted `scope`); write-tier
+   * checks then fall back to GSC_SCOPES, and status shows it as unknown.
+   */
+  grantedScope: string | null;
   clientId: string;
   email?: string;
   storedAt: string;
@@ -67,6 +73,7 @@ interface StoredTokenRecord {
   v: 1;
   refresh_token: string;
   scope: string;
+  granted_scope?: string;
   client_id: string;
   email?: string;
   stored_at: string;
@@ -132,7 +139,8 @@ export class GoogleTokenStore {
       typeof rec.scope !== 'string' ||
       typeof rec.client_id !== 'string' ||
       typeof rec.stored_at !== 'string' ||
-      (rec.email !== undefined && typeof rec.email !== 'string')
+      (rec.email !== undefined && typeof rec.email !== 'string') ||
+      (rec.granted_scope !== undefined && typeof rec.granted_scope !== 'string')
     ) {
       throw new StoredTokenUnreadableError('unrecognized record format');
     }
@@ -265,7 +273,10 @@ export class GoogleTokenStore {
    * replaces only that account; a legacy record for the same email is
    * removed. Without an email it goes to the legacy key.
    */
-  async save(refreshToken: string, meta: Omit<StoredTokenMeta, 'storedAt'>): Promise<StoredTokenMeta> {
+  async save(
+    refreshToken: string,
+    meta: Omit<StoredTokenMeta, 'storedAt' | 'grantedScope'> & { grantedScope?: string | null },
+  ): Promise<StoredTokenMeta> {
     const id = meta.email ? accountIdFor(meta.email) : LEGACY_ACCOUNT_ID;
     const { key, aad } = this.location(id);
     const rec: StoredTokenRecord = {
@@ -276,6 +287,7 @@ export class GoogleTokenStore {
       ...(meta.email ? { email: meta.email } : {}),
       stored_at: new Date().toISOString(),
     };
+    if (meta.grantedScope) rec.granted_scope = meta.grantedScope;
     await this.kv.put(key, JSON.stringify(rec));
     if (id !== LEGACY_ACCOUNT_ID) {
       await this.writeIndex([...(await this.readIndex()), id]);
@@ -288,6 +300,18 @@ export class GoogleTokenStore {
       if (legacy?.email && accountIdFor(legacy.email) === id) await this.kv.delete(KV_KEYS.refreshToken);
     }
     return toMeta(rec);
+  }
+
+  /**
+   * Record the scope Google returned on a later token response. No-op when
+   * the account is not stored. Does not rotate the refresh token.
+   */
+  async updateGrantedScope(accountId: string, grantedScope: string): Promise<void> {
+    const { key } = this.location(accountId);
+    const rec = await this.readRecord(key);
+    if (!rec || rec.granted_scope === grantedScope) return;
+    const next: StoredTokenRecord = { ...rec, granted_scope: grantedScope };
+    await this.kv.put(key, JSON.stringify(next));
   }
 
   /** Delete one account's record. Returns false when it was not stored. */
@@ -353,6 +377,7 @@ export class GoogleTokenStore {
 function toMeta(rec: StoredTokenRecord): StoredTokenMeta {
   return {
     scope: rec.scope,
+    grantedScope: rec.granted_scope && rec.granted_scope !== '' ? rec.granted_scope : null,
     clientId: rec.client_id,
     ...(rec.email ? { email: rec.email } : {}),
     storedAt: rec.stored_at,
