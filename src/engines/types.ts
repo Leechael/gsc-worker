@@ -1,9 +1,11 @@
 /**
- * Shared plumbing for search engines other than Google (src/engines/<id>/).
+ * Shared plumbing for opt-in engines in src/engines/<id>/ (Bing, IndexNow,
+ * Yandex, Seznam, and Google Analytics 4).
  *
- * Each engine is opt-in: its tools are registered only when its secret is
- * configured (see enabled()). Write and destructive tools reuse the scope tier
- * from GSC_SCOPES / GSC_ALLOW_DESTRUCTIVE, so one switch governs every engine.
+ * Each engine is opt-in: its tools are registered only when enabled() is true
+ * (a secret or, for GA4, GA4_ENABLED). Write and destructive tools reuse the
+ * scope tier from GSC_SCOPES / GSC_ALLOW_DESTRUCTIVE, so one switch governs
+ * every engine. GA4 itself is read-only.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { Config, ScopeTier } from '../lib/config.js';
@@ -25,6 +27,11 @@ export interface EngineModule {
   label: string;
   /** The secret/var that enables the engine (named in diagnostics, never its value). */
   enableVar: string;
+  /**
+   * Override the default get_capabilities hint ("set the {enableVar} secret").
+   * Use when the engine is a flag rather than a secret (GA4_ENABLED).
+   */
+  enableHint?: string;
   /** True when the engine's secret is configured. */
   enabled(config: Config): boolean;
   /** Extra non-secret status lines for get_capabilities (e.g. config problems). */

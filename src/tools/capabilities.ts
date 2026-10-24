@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ServerServices } from '../mcp/context.js';
-import { scopesCover } from '../lib/google-oauth/google.js';
+import { hasAnalyticsReadScope, scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
 import { engineCapabilityLines } from '../engines/index.js';
 import type { AccountStatus } from '../lib/auth.js';
@@ -31,18 +31,21 @@ const TIER_TOOLS: Record<string, string[]> = {
 };
 
 /** One line per connected Google account; never prints tokens. */
-function googleAccountLines(accounts: AccountStatus[]): string[] {
+function googleAccountLines(accounts: AccountStatus[], ga4Enabled: boolean): string[] {
   if (accounts.length === 0) return [];
   const lines = [`GOOGLE ACCOUNTS (${accounts.length}; tools pick the account with the highest permission on each property):`];
   for (const a of accounts) {
     const name = a.source === 'env' ? 'GOOGLE_REFRESH_TOKEN (env)' : a.email ?? `${a.id} (stored before account emails were recorded)`;
     const granted = a.stored?.grantedScope;
-    const scope =
+    let scope =
       granted == null
         ? 'granted scope unknown'
         : granted.split(/\s+/).includes(GOOGLE_SCOPE_FULL)
           ? 'granted scope full'
           : 'granted scope readonly';
+    if (ga4Enabled && granted != null) {
+      scope += hasAnalyticsReadScope(granted) ? ', analytics' : ', no analytics';
+    }
     const details = [a.source, scope, a.stored ? `added ${a.stored.storedAt}` : null].filter(Boolean).join(', ');
     lines.push(`  - ${name} [${details}]: ${a.available ? 'available' : `unavailable: ${a.error ?? 'client not configured'}`}`);
   }
@@ -82,10 +85,17 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       }
       if (status.source === 'kv' && status.stored) {
         const granted = status.stored.grantedScope;
-        if (granted !== null && !scopesCover(granted, svc.config.google.scopes)) {
+        const gscScopes = svc.config.google.scopes.filter((s) => s.includes('/auth/webmasters'));
+        if (granted !== null && !scopesCover(granted, gscScopes)) {
           authStatus +=
             `\n⚠️ The granted scope (${granted}) does not cover the configured GSC_SCOPES; ` +
             'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+        }
+        if (svc.config.ga4Enabled && granted !== null && !hasAnalyticsReadScope(granted)) {
+          authStatus +=
+            '\n⚠️ GA4_ENABLED is on, but this account\'s grant does not include analytics.readonly. ' +
+            'ga4_* tools will refuse until you re-authorize at https://<worker-host>/auth/google ' +
+            '(keep Google Analytics checked on the consent screen).';
         }
       }
       const tokenSource = {
@@ -103,7 +113,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         'AUTH STATUS:',
         authStatus,
         `TOKEN SOURCE: ${tokenSource}`,
-        ...googleAccountLines(status.accounts),
+        ...googleAccountLines(status.accounts, svc.config.ga4Enabled),
         '',
         'GETTING STARTED:',
         '1. Fix auth if needed (see AUTH STATUS).',

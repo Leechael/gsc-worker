@@ -13,7 +13,7 @@ import {
 import { GoogleTokenStore, KV_KEYS, OAUTH_STATE_TTL_SEC, StoredTokenUnreadableError } from '../src/lib/google-oauth/store.js';
 import { emailFromIdToken, scopesCover } from '../src/lib/google-oauth/google.js';
 import { TokenProvider, TokenRefreshError } from '../src/lib/auth.js';
-import { GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
+import { GOOGLE_SCOPE_ANALYTICS, GOOGLE_SCOPE_ANALYTICS_READONLY, GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
 import { MemoryKv } from './helpers/memory-kv.js';
 
 const KEY = randomBytes(32).toString('base64');
@@ -231,6 +231,8 @@ test('scopesCover: full covers readonly, readonly does not cover full', () => {
   assert.equal(scopesCover(`openid ${GOOGLE_SCOPE_FULL}`, [GOOGLE_SCOPE_READONLY]), true);
   assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_FULL]), false);
   assert.equal(scopesCover('openid email', [GOOGLE_SCOPE_READONLY]), false);
+  assert.equal(scopesCover(GOOGLE_SCOPE_ANALYTICS, [GOOGLE_SCOPE_ANALYTICS_READONLY]), true);
+  assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_ANALYTICS_READONLY]), false);
 });
 
 test('updateGrantedScope writes the Google-returned scope without rotating the token', async () => {

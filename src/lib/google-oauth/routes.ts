@@ -206,10 +206,13 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
     if (!scopesCover(result.scope, cfg.google.scopes)) {
+      const keep = cfg.ga4Enabled
+        ? 'Keep the Search Console and Google Analytics permissions checked.'
+        : 'Keep the Search Console permission checked.';
       return respond(c, 400, 'Authorization failed', {
         error: 'insufficient_scope',
-        error_description: `Google did not grant the required Search Console scope (${cfg.google.scopes.join(' ')}). ` +
-          `Open ${AUTH_BASE_PATH} again and keep the Search Console permission checked.`,
+        error_description: `Google did not grant the required scope (${cfg.google.scopes.join(' ')}). ` +
+          `Open ${AUTH_BASE_PATH} again. ${keep}`,
       });
     }
 

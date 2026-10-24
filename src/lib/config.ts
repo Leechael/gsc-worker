@@ -21,6 +21,9 @@ export type AuthMode = 'cf-access' | 'bearer' | 'oauth' | 'none';
 
 export const GOOGLE_SCOPE_READONLY = 'https://www.googleapis.com/auth/webmasters.readonly';
 export const GOOGLE_SCOPE_FULL = 'https://www.googleapis.com/auth/webmasters';
+export const GOOGLE_SCOPE_ANALYTICS_READONLY = 'https://www.googleapis.com/auth/analytics.readonly';
+export const GOOGLE_SCOPE_ANALYTICS = 'https://www.googleapis.com/auth/analytics';
+export const GOOGLE_SCOPE_ANALYTICS_EDIT = 'https://www.googleapis.com/auth/analytics.edit';
 
 export interface CfAccessConfig {
   teamDomain: string;
@@ -87,6 +90,12 @@ export interface Config {
    * each engine parses its own entries.
    */
   engineEnv: Readonly<Record<string, string>>;
+  /**
+   * GA4_ENABLED: register ga4_* tools and add analytics.readonly to the Google
+   * OAuth request. Off by default so existing Search Console deployments keep
+   * their current consent screen.
+   */
+  ga4Enabled: boolean;
 }
 
 /** Env name prefixes owned by src/engines/* (add one per new engine). */
@@ -139,6 +148,9 @@ export function parseConfig(): Config {
     scopes = [GOOGLE_SCOPE_READONLY];
     scopeTier = 'read';
   }
+
+  const ga4Enabled = parseBool('GA4_ENABLED');
+  if (ga4Enabled) scopes.push(GOOGLE_SCOPE_ANALYTICS_READONLY);
 
   // --- GSC_DATA_STATE ---
   const rawDataState = (env('GSC_DATA_STATE') ?? 'all').toLowerCase().trim();
@@ -196,6 +208,7 @@ export function parseConfig(): Config {
     host: env('MCP_HOST') ?? '127.0.0.1',
     port: Number.parseInt(env('MCP_PORT') ?? env('PORT') ?? '3001', 10),
     engineEnv: engineEnvFrom(currentSource),
+    ga4Enabled,
   };
   const allowedHosts = envList('MCP_ALLOWED_HOSTS');
   if (allowedHosts.length > 0) cfg.allowedHosts = allowedHosts;
