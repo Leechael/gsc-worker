@@ -19,8 +19,9 @@ import { registerEngineTools } from '../engines/index.js';
  * conditionally registered, so prompts referencing them get upgrade guidance
  * rather than "tool not found".
  *
- * Other search engines (src/engines/) are opt-in: their tools are registered
- * only when the engine's secret is configured, and then tier-gated the same way.
+ * Opt-in engines (src/engines/) are registered only when enabled (a secret, or
+ * GA4_ENABLED for Analytics). Write/destructive engine tools are then
+ * tier-gated the same way; GA4 tools are read-only.
  */
 export function buildMcpServer(): McpServer {
   const svc = getServices();

@@ -1,4 +1,9 @@
-import { GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY } from '../config.js';
+import {
+  GOOGLE_SCOPE_ANALYTICS,
+  GOOGLE_SCOPE_ANALYTICS_READONLY,
+  GOOGLE_SCOPE_FULL,
+  GOOGLE_SCOPE_READONLY,
+} from '../config.js';
 import { base64Decode } from './crypto.js';
 
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -164,11 +169,20 @@ export async function revokeGoogleToken(fetchImpl: typeof fetch, token: string):
 export function scopesCover(granted: string, required: string[]): boolean {
   const have = new Set(granted.split(/\s+/).filter(Boolean));
   return required.every(
-    (s) => have.has(s) || (s === GOOGLE_SCOPE_READONLY && have.has(GOOGLE_SCOPE_FULL)),
+    (s) =>
+      have.has(s) ||
+      (s === GOOGLE_SCOPE_READONLY && have.has(GOOGLE_SCOPE_FULL)) ||
+      (s === GOOGLE_SCOPE_ANALYTICS_READONLY && have.has(GOOGLE_SCOPE_ANALYTICS)),
   );
 }
 
 /** True when the grant includes the non-readonly webmasters scope. */
 export function hasWebmastersWriteScope(granted: string): boolean {
   return granted.split(/\s+/).filter(Boolean).includes(GOOGLE_SCOPE_FULL);
+}
+
+/** True when the grant can call the Analytics Admin and Data APIs for reads. */
+export function hasAnalyticsReadScope(granted: string): boolean {
+  const have = granted.split(/\s+/).filter(Boolean);
+  return have.includes(GOOGLE_SCOPE_ANALYTICS_READONLY) || have.includes(GOOGLE_SCOPE_ANALYTICS);
 }

@@ -29,7 +29,7 @@ You need:
 
 - a Cloudflare account with a zone (domain) for the Worker's hostname,
 - Cloudflare Zero Trust (the free plan is enough) for Cloudflare Access,
-- a Google Cloud project with the **Google Search Console API** enabled.
+- a Google Cloud project with the **Google Search Console API** enabled. To use the optional `ga4_*` tools, also enable the **Google Analytics Admin API** and **Google Analytics Data API**, and give the Google user at least **Viewer** on each GA4 property.
 
 ### 1. Create the Google OAuth client
 
@@ -38,7 +38,7 @@ In Google Cloud Console, go to **APIs & Services → Credentials → Create cred
 - Application type: **Web application**. A *Desktop* client cannot be used here because it does not accept an `https://` redirect URI.
 - Authorized redirect URI: `https://<your-host>/auth/google/callback`, for example `https://gsc-mcp.example.com/auth/google/callback`.
 
-On the **OAuth consent screen**, add the scope `https://www.googleapis.com/auth/webmasters.readonly` (or `.../auth/webmasters` for the full tier). Then publish the app **In production**: refresh tokens issued while it is in *Testing* expire after 7 days.
+On the **OAuth consent screen**, add the scope `https://www.googleapis.com/auth/webmasters.readonly` (or `.../auth/webmasters` for the full tier). If you will set `GA4_ENABLED=true`, also add `https://www.googleapis.com/auth/analytics.readonly`. Then publish the app **In production**: refresh tokens issued while it is in *Testing* expire after 7 days.
 
 ### 2. Configure `wrangler.jsonc`
 
@@ -52,6 +52,7 @@ On the **OAuth consent screen**, add the scope `https://www.googleapis.com/auth/
 | `vars.CF_ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com`, where `<team>` is the team name shown under **Zero Trust → Settings** |
 | `vars.CF_ACCESS_AUD` | The Access application's AUD tag (step 4) |
 | `vars.GSC_SCOPES` | `readonly` (default) or `full` |
+| `vars.GA4_ENABLED` | omit or `false`; `true` registers `ga4_*` tools and requests Analytics on consent |
 
 ### 3. Set secrets and deploy
 
@@ -96,7 +97,7 @@ Open `https://<your-host>/auth/google` in a browser and approve the consent scre
 
 | Route | Method | What it does |
 |---|---|---|
-| `/auth/google` | GET | Redirects to Google consent with `access_type=offline`, `prompt=consent select_account`, the scope from `GSC_SCOPES`, a random `state`, and a PKCE S256 challenge |
+| `/auth/google` | GET | Redirects to Google consent with `access_type=offline`, `prompt=consent select_account`, the scope from `GSC_SCOPES` (plus `analytics.readonly` when `GA4_ENABLED=true`), a random `state`, and a PKCE S256 challenge |
 | `/auth/google/callback` | GET | Validates `state`, exchanges the code with the PKCE verifier, and stores the refresh token encrypted. Browsers are then redirected (303) to `/auth/google/status?connected=1`, so a reload does not resubmit the code; JSON clients get the result directly. The token is never displayed |
 | `/auth/google/status` | GET | Shows the default token source, every connected account (email, scope, added time, health), and the redirect URI in use. No secrets |
 | `/auth/google/accounts` | GET | Connected accounts with source, scope, added time and health. No secrets. Admins only (see below) |
@@ -131,7 +132,7 @@ Ciphertexts use a fresh 96-bit IV and are bound to their key name with AES-GCM a
 
 **Propagation.** Workers KV is eventually consistent: a new or deleted token can take up to about 60 seconds to be visible in other Cloudflare locations. Each isolate also trusts the stored token's metadata for up to 30 seconds before checking KV again. So after re-authorizing or disconnecting, requests served elsewhere may use the previous token for up to about a minute and a half. The isolate that handled the change switches immediately. If Google rejects a cached access token with 401, the server fetches a new one and retries the call once.
 
-**Re-authorizing.** Open `/auth/google` again and sign in as the same account. The new token replaces that account's stored token; other accounts are untouched. When Google answers `invalid_grant` (token revoked, expired, or unused for 6 months), tool errors say to re-open `/auth/google`. After changing `GSC_SCOPES`, re-authorize so the stored grant covers the new scope; the status page shows `covers_required_scope`.
+**Re-authorizing.** Open `/auth/google` again and sign in as the same account. The new token replaces that account's stored token; other accounts are untouched. When Google answers `invalid_grant` (token revoked, expired, or unused for 6 months), tool errors say to re-open `/auth/google`. After changing `GSC_SCOPES` or turning on `GA4_ENABLED`, re-authorize so the stored grant covers the new scope; the status page shows `covers_required_scope`. A token minted before `GA4_ENABLED` has no Analytics permission until you consent again and keep Google Analytics checked.
 
 **Redirect URI.** By default it is `https://<request host>/auth/google/callback`, and the host must be listed in `MCP_ALLOWED_HOSTS`. Set `GOOGLE_REDIRECT_URI` to pin it explicitly; the callback is then only accepted on that URI's host. Either way it must exactly match an authorized redirect URI on the Google client.
 
@@ -238,6 +239,7 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `GOOGLE_AUTH_ADMINS` | Workers | var | | Comma-separated identities allowed to connect/disconnect Google (emails, service-token common names, `static-bearer`). Unset: everyone except Access service tokens |
 | `GSC_CREDENTIALS_FILE` | Node, stdio | var | | JSON written by `npm run auth` (or Google's `token.json`) |
 | `GSC_SCOPES` | all | var | `readonly` | `readonly` or `full` (`webmasters`) |
+| `GA4_ENABLED` | all | var | `false` | `true` registers `ga4_*` tools and adds `analytics.readonly` to Google OAuth ([details](#google-analytics-4)) |
 | `GSC_ALLOW_DESTRUCTIVE` | all | var | `false` | With `GSC_SCOPES=full`, enables add/delete tools |
 | `GSC_DATA_STATE` | all | var | `all` | `all` (matches the GSC UI) or `final` |
 | `GSC_SKIP_OAUTH` | all | var | | Accepted for compatibility with mcp-gsc and ignored (no service accounts) |
@@ -263,11 +265,44 @@ All 21 tools are always registered. Tools above the current tier return upgrade 
 | write | `GSC_SCOPES=full` | `submit_sitemap`, `manage_sitemaps` (`submit`) |
 | destructive | `GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
 
-Start with `get_capabilities`: it reports the tier, auth status, token source, and the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API).
+Start with `get_capabilities`: it reports the tier, auth status, token source, the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API), and, when `GA4_ENABLED=true`, the Google Analytics API vs UI boundary.
+
+## Google Analytics 4
+
+Setting `GA4_ENABLED=true` registers read-only `ga4_*` tools for the [Google Analytics Admin API](https://developers.google.com/analytics/devguides/config/admin/v1) and [Google Analytics Data API](https://developers.google.com/analytics/devguides/reporting/data/v1). They reuse the same Google OAuth tokens as Search Console (including the multi-account KV store). This is opt-in so existing Search Console deployments keep their current consent screen.
+
+**Enable in Google Cloud**
+
+1. In the same project as the OAuth client, enable **Google Analytics Admin API** and **Google Analytics Data API** ([API Library](https://console.cloud.google.com/apis/library)).
+2. On the OAuth consent screen, add `https://www.googleapis.com/auth/analytics.readonly`.
+3. In Google Analytics, the signed-in user needs at least **Viewer** on each property you will query (Admin → Property access management).
+4. Set the flag and re-consent so stored tokens include Analytics:
+
+```bash
+# wrangler.jsonc vars (or export GA4_ENABLED=true for Node/stdio)
+#   "GA4_ENABLED": "true"
+# Then re-authorize:
+#   Workers: open https://<host>/auth/google and keep Google Analytics checked
+#   Node:    npm run auth -- --scopes readonly --ga4 --client-secrets … --out gsc-credentials.json
+```
+
+Existing refresh tokens that only have Search Console scopes will not run `ga4_*` tools. `get_capabilities` and the tools themselves say to re-authorize. The in-Worker callback refuses a grant that omits Analytics while `GA4_ENABLED` is on.
+
+**Tools** (all read; they appear only when `GA4_ENABLED=true`)
+
+| Group | Tools |
+|---|---|
+| Admin discovery | `ga4_get_account_summaries`, `ga4_get_property_details`, `ga4_list_google_ads_links`, `ga4_list_property_annotations` |
+| Data API reports | `ga4_run_report`, `ga4_run_realtime_report`, `ga4_get_custom_dimensions_and_metrics`, `ga4_check_compatibility` |
+| Data API alpha | `ga4_run_funnel_report`, `ga4_run_conversions_report` |
+
+Start with `ga4_get_account_summaries` for property IDs (`properties/123` or `123`). Report arguments accept snake_case or REST camelCase; the Worker sends camelCase JSON to Google.
+
+**Not enabled.** Admin write (create annotation, data streams, audiences, user management) stays off: this server requests `analytics.readonly` only, not `analytics.edit`. Explorations other than funnel reports, DebugView, the advertising UI beyond the conversions report, and BigQuery export are UI-only or out of scope.
 
 ## Other search engines
 
-Engines other than Google are opt-in. Their tools are registered only when the engine's secret is set, and they use the same scope tiers as the Google tools: read tools always run, submit tools need `GSC_SCOPES=full`, and remove tools also need `GSC_ALLOW_DESTRUCTIVE=true`. Note that `GSC_SCOPES=full` also switches the Google grant to the full `webmasters` scope, so re-authorize Google after changing it. `get_capabilities` lists each engine as enabled or not configured, without showing secret values.
+Bing, IndexNow, Yandex, and Seznam are opt-in. Their tools are registered only when the engine's secret is set, and they use the same scope tiers as the Google tools: read tools always run, submit tools need `GSC_SCOPES=full`, and remove tools also need `GSC_ALLOW_DESTRUCTIVE=true`. Note that `GSC_SCOPES=full` also switches the Google grant to the full `webmasters` scope, so re-authorize Google after changing it. `get_capabilities` lists each engine as enabled or not configured, without showing secret values. Google Analytics 4 is a separate opt-in (see above): it uses `GA4_ENABLED` and the Google OAuth grant, not a separate API key.
 
 ### Bing Webmaster Tools
 
