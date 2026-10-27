@@ -30,6 +30,9 @@ export function buildAuthorizationUrl(opts: {
   // consent forces a refresh token even when the account already granted this
   // client; select_account shows the account chooser so another account can be added.
   url.searchParams.set('prompt', 'consent select_account');
+  // Keep scopes this account already granted the client (e.g. Analytics added
+  // through ?ga4=1), so a plain re-authorization does not drop them.
+  url.searchParams.set('include_granted_scopes', 'true');
   url.searchParams.set('state', opts.state);
   url.searchParams.set('code_challenge', opts.codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');

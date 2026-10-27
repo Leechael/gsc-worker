@@ -41,7 +41,6 @@
     // readonly (default) or full. Changing it requires re-opening /auth/google.
     "GSC_SCOPES": "readonly",
     // Optional:
-    // "GA4_ENABLED": "false",  // true: register ga4_* tools and request analytics.readonly
     // "GSC_ALLOW_DESTRUCTIVE": "false",
     // "GSC_DATA_STATE": "all",
     // "CF_ACCESS_ALLOWED_EMAILS": "you@example.com",
@@ -56,9 +55,8 @@
   //   GOOGLE_REFRESH_TOKEN                     optional fallback when nothing is stored in KV
   //   MCP_AUTH_TOKEN                           only with MCP_AUTH_MODE=bearer
   //
-  // Optional engines (tools appear only when configured):
-  //   GA4_ENABLED=true                         Google Analytics Admin + Data API (analytics.readonly on consent)
-  //                                            Enable those two APIs in the GCP project; Viewer on each GA4 property
+  // Google Analytics 4 (ga4_* tools) needs no setting here: enable the Analytics Admin + Data APIs in the
+  // GCP project, give the Google user Viewer on each GA4 property, then open /auth/google?ga4=1.
   // Optional search-engine secrets (tools appear only when the secret is set):
   //   BING_API_KEY                             Bing Webmaster Tools > Settings > API access > Generate API Key
   //                                            npx wrangler secret put BING_API_KEY

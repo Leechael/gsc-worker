@@ -85,6 +85,8 @@ export interface OAuthStateRecord {
   /** Identity (Access email / service token / static bearer) that started the flow. */
   principal: string;
   redirectUri: string;
+  /** Scopes requested at start; the callback requires them. Absent in records from older versions. */
+  scopes?: string[];
   createdAt: string;
 }
 

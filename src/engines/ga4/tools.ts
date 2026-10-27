@@ -1,5 +1,5 @@
 /**
- * Google Analytics 4 MCP tools (ga4_*). Registered only when GA4_ENABLED=true.
+ * Google Analytics 4 MCP tools (ga4_*). Always registered; each checks the account's granted scope.
  * Read-only: Admin write (create annotation, streams, audiences) is not
  * exposed. The OAuth grant is analytics.readonly unless the operator later
  * adds a separate edit-scope gate.
@@ -149,8 +149,8 @@ async function analyticsScopeGate(
     granted_scope: granted,
     required_scope: GOOGLE_SCOPE_ANALYTICS_READONLY,
     resolution:
-      `Re-authorize ${name} so Google grants analytics.readonly. On Workers open /auth/google ` +
-      '(with GA4_ENABLED=true so Analytics is requested). On Node/stdio run ' +
+      `Re-authorize ${name} so Google grants analytics.readonly. On Workers open /auth/google?ga4=1 ` +
+      'and keep Google Analytics checked. On Node/stdio run ' +
       'npm run auth -- --scopes readonly --ga4 (or --scopes full --ga4) and replace the refresh token. ' +
       'Existing Search Console-only tokens do not include Analytics until you re-consent.',
   });

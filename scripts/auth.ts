@@ -8,8 +8,7 @@
  *     --out gsc-credentials.json
  *
  * --ga4: also request https://www.googleapis.com/auth/analytics.readonly so the
- *   token can call Google Analytics Admin and Data APIs (needed when the
- *   server has GA4_ENABLED=true).
+ *   token can call Google Analytics Admin and Data APIs (the ga4_* tools).
  *
  * --client-secrets: the JSON you downloaded from Google Cloud Console
  *   (APIs & Services → Credentials → OAuth client). If omitted, reads

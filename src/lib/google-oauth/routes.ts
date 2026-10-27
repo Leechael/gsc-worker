@@ -1,6 +1,12 @@
 import type { Context, Hono } from 'hono';
 import type { Config } from '../config.js';
-import { GOOGLE_CALLBACK_PATH, INVALID_CONFIG_MESSAGE, isLoopbackHost, TOKEN_KV_BINDING } from '../config.js';
+import {
+  GOOGLE_CALLBACK_PATH,
+  GOOGLE_SCOPE_ANALYTICS_READONLY,
+  INVALID_CONFIG_MESSAGE,
+  isLoopbackHost,
+  TOKEN_KV_BINDING,
+} from '../config.js';
 import type { AuthBuildResult, AuthIdentity } from '../mcp-auth/index.js';
 import type { ServerServices } from '../../mcp/context.js';
 import { pkceChallenge, randomToken } from './crypto.js';
@@ -60,7 +66,8 @@ export function resolveRedirectUri(cfg: Config, requestUrl: string, hostHeader: 
  * each authorization stores (or replaces) the token of the account that
  * signed in, keyed by its email:
  *
- *   GET  /auth/google                  → 302 to Google consent (state + PKCE S256)
+ *   GET  /auth/google                  → 302 to Google consent (state + PKCE S256);
+ *                                        ?ga4=1 also requests analytics.readonly
  *   GET  /auth/google/callback         → exchange code, store encrypted refresh token
  *   GET  /auth/google/status           → sources / scopes / accounts / stored-at (no secrets)
  *   GET  /auth/google/accounts         → connected accounts and their health (admins)
@@ -115,18 +122,22 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
     if (!redirect.ok) return respond(c, 400, 'Authorization unavailable', { error: 'invalid_redirect_uri', error_description: redirect.error });
 
+    const scopes = wantsAnalytics(c.req.query('ga4'))
+      ? [...cfg.google.scopes, GOOGLE_SCOPE_ANALYTICS_READONLY]
+      : cfg.google.scopes;
     const state = randomToken();
     const codeVerifier = randomToken();
     await svc.tokenStore!.putState(state, {
       codeVerifier,
       principal: c.get('authPrincipal'),
       redirectUri: redirect.uri,
+      scopes,
       createdAt: new Date().toISOString(),
     });
     const location = buildAuthorizationUrl({
       clientId: cfg.google.clientId!,
       redirectUri: redirect.uri,
-      scopes: cfg.google.scopes,
+      scopes,
       state,
       codeChallenge: await pkceChallenge(codeVerifier),
     });
@@ -176,6 +187,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
     const record = taken.record;
+    const requiredScopes = record.scopes ?? cfg.google.scopes;
     if (redirect.uri !== record.redirectUri) {
       return respond(c, 400, 'Authorization failed', {
         error: 'invalid_redirect_uri',
@@ -191,7 +203,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         code,
         redirectUri: record.redirectUri,
         codeVerifier: record.codeVerifier,
-        requestedScopes: cfg.google.scopes,
+        requestedScopes: requiredScopes,
       });
     } catch (e) {
       const message = e instanceof GoogleOAuthError ? e.message : 'Google token exchange failed.';
@@ -205,14 +217,15 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         error_description: `Google did not return a refresh token. Open ${AUTH_BASE_PATH} again and approve the consent screen.`,
       });
     }
-    if (!scopesCover(result.scope, cfg.google.scopes)) {
-      const keep = cfg.ga4Enabled
+    if (!scopesCover(result.scope, requiredScopes)) {
+      const analytics = requiredScopes.includes(GOOGLE_SCOPE_ANALYTICS_READONLY);
+      const keep = analytics
         ? 'Keep the Search Console and Google Analytics permissions checked.'
         : 'Keep the Search Console permission checked.';
       return respond(c, 400, 'Authorization failed', {
         error: 'insufficient_scope',
-        error_description: `Google did not grant the required scope (${cfg.google.scopes.join(' ')}). ` +
-          `Open ${AUTH_BASE_PATH} again. ${keep}`,
+        error_description: `Google did not grant the required scope (${requiredScopes.join(' ')}). ` +
+          `Open ${AUTH_BASE_PATH}${analytics ? '?ga4=1' : ''} again. ${keep}`,
       });
     }
 
@@ -413,6 +426,11 @@ function accountView(cfg: Config, a: AccountStatus): Record<string, unknown> {
   };
 }
 
+/** `?ga4=1` (or true/yes) on /auth/google adds analytics.readonly to the request. */
+function wantsAnalytics(value: string | undefined): boolean {
+  return ['1', 'true', 'yes'].includes((value ?? '').toLowerCase());
+}
+
 function kvAccountIds(accounts: AccountStatus[]): string[] {
   return accounts.filter((a) => a.source === 'kv').map((a) => a.email ?? a.id);
 }
@@ -582,6 +600,7 @@ a,button{font:inherit}button{padding:.35rem .9rem}
 ${renderTable(data)}
 <nav>
 <a href="${AUTH_BASE_PATH}">Authorize Google${removable.length ? ' (add or refresh an account)' : ''}</a>
+<a href="${AUTH_BASE_PATH}?ga4=1">Authorize Google with Analytics</a>
 <a href="${AUTH_BASE_PATH}/status">Status</a>
 </nav>
 ${forms ? `<nav>\n${forms}\n</nav>` : ''}

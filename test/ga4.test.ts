@@ -93,7 +93,6 @@ async function withAccounts(
     return Response.json({ access_token: `at-${rt}`, expires_in: 3600 });
   }) as typeof fetch;
   setEnvSource({
-    GA4_ENABLED: 'true',
     GOOGLE_CLIENT_ID: CLIENT,
     GOOGLE_CLIENT_SECRET: 'sec',
   });
@@ -146,28 +145,17 @@ test('hasAnalyticsReadScope and scopesCover treat analytics as covering readonly
   assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_ANALYTICS_READONLY]), false);
 });
 
-test('parseConfig adds analytics.readonly only when GA4_ENABLED is on', () => {
+test('default Google scopes never include analytics (a leftover GA4_ENABLED is ignored)', () => {
   setEnvSource({});
-  assert.equal(parseConfig().ga4Enabled, false);
   assert.deepEqual(parseConfig().google.scopes, [GOOGLE_SCOPE_READONLY]);
   setEnvSource({ GA4_ENABLED: 'true', GSC_SCOPES: 'full' });
-  const cfg = parseConfig();
-  assert.equal(cfg.ga4Enabled, true);
-  assert.deepEqual(cfg.google.scopes, [GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_ANALYTICS_READONLY]);
+  assert.deepEqual(parseConfig().google.scopes, [GOOGLE_SCOPE_FULL]);
 });
 
-// ---------- opt-in registration ----------
+// ---------- registration ----------
 
-test('ga4 tools are not registered when GA4_ENABLED is unset', () => {
+test('ga4 tools are registered without any configuration', () => {
   setEnvSource({});
-  const names = Object.keys(toolsOf(buildMcpServer()));
-  assert.deepEqual(names.filter((n) => n.startsWith('ga4_')), []);
-});
-
-test('ga4 tools are registered when GA4_ENABLED=true (blank / false do not count)', () => {
-  setEnvSource({ GA4_ENABLED: 'false' });
-  assert.equal(Object.keys(toolsOf(buildMcpServer())).some((n) => n.startsWith('ga4_')), false);
-  setEnvSource({ GA4_ENABLED: 'true' });
   const names = Object.keys(toolsOf(buildMcpServer())).filter((n) => n.startsWith('ga4_')).sort();
   assert.deepEqual(names, GA4_TOOLS.map((t) => t.name).sort());
   assert.ok(ENGINES.includes(ga4Engine));
@@ -180,15 +168,17 @@ test('get_capabilities reports GA4 status, boundary, and re-consent without secr
   const offServer = new McpServer({ name: 't', version: '0' });
   registerCapabilitiesTools(offServer, { config: off, tokenProvider, gsc: new GscClient({ tokenProvider }) });
   const offText = (await toolsOf(offServer).get_capabilities!.executor({}, {})).content[0]!.text;
-  assert.match(offText, /Google Analytics 4: not configured \(set GA4_ENABLED=true/);
-  assert.doesNotMatch(offText, /ga4_run_report/);
+  assert.match(offText, /Google Analytics 4: enabled\n/);
+  assert.match(offText, /\/auth\/google\?ga4=1/);
+  assert.match(offText, /ga4_run_report \[read\]/);
+  assert.doesNotMatch(offText, /GA4_ENABLED/);
 
   const { run } = await withAccounts(
     { 'ada@example.com': `${GOOGLE_SCOPE_READONLY} ${GOOGLE_SCOPE_ANALYTICS_READONLY}` },
     () => json({}),
   );
   const capServer = new McpServer({ name: 't', version: '0' });
-  setEnvSource({ GA4_ENABLED: 'true', GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
+  setEnvSource({ GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
   const kv = new MemoryKv();
   const store = new GoogleTokenStore(kv, KEY);
   await store.save('rt-ada', {
@@ -201,7 +191,7 @@ test('get_capabilities reports GA4 status, boundary, and re-consent without secr
   const tp = new TokenProvider(cfg.google, (async () => Response.json({ access_token: 'at', expires_in: 3600 })) as typeof fetch, { store });
   registerCapabilitiesTools(capServer, { config: cfg, tokenProvider: tp, gsc: new GscClient({ tokenProvider: tp }), tokenStore: store });
   const onText = (await toolsOf(capServer).get_capabilities!.executor({}, {})).content[0]!.text;
-  assert.match(onText, /Google Analytics 4: enabled \(GA4_ENABLED is set\)/);
+  assert.match(onText, /Google Analytics 4: enabled\n/);
   assert.match(onText, /ga4_run_report \[read\]/);
   assert.match(onText, /ga4_run_funnel_report \[read\]/);
   assert.match(onText, /Capability boundary/);
@@ -212,7 +202,7 @@ test('get_capabilities reports GA4 status, boundary, and re-consent without secr
   void run;
 });
 
-test('get_capabilities warns when GA4 is on but the stored grant has no analytics scope', async () => {
+test('get_capabilities marks a Search Console-only grant as no analytics, without a warning', async () => {
   const kv = new MemoryKv();
   const store = new GoogleTokenStore(kv, KEY);
   await store.save('rt-ada', {
@@ -221,20 +211,20 @@ test('get_capabilities warns when GA4 is on but the stored grant has no analytic
     clientId: CLIENT,
     email: 'ada@example.com',
   });
-  setEnvSource({ GA4_ENABLED: 'true', GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
+  setEnvSource({ GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
   const cfg = parseConfig();
   const tp = new TokenProvider(cfg.google, undefined, { store });
   const server = new McpServer({ name: 't', version: '0' });
   registerCapabilitiesTools(server, { config: cfg, tokenProvider: tp, gsc: new GscClient({ tokenProvider: tp }), tokenStore: store });
   const text = (await toolsOf(server).get_capabilities!.executor({}, {})).content[0]!.text;
-  assert.match(text, /does not include analytics\.readonly/);
+  assert.doesNotMatch(text, /does not include analytics/);
   assert.match(text, /granted scope readonly, no analytics/);
   assert.doesNotMatch(text, /does not cover the configured GSC_SCOPES/);
 });
 
 // ---------- OAuth ----------
 
-test('start requests analytics.readonly only when GA4_ENABLED=true', async () => {
+test('start requests analytics.readonly only with ?ga4=1, and always keeps granted scopes', async () => {
   function setup(env: Record<string, unknown> = {}) {
     const kv = new MemoryKv();
     setEnvSource({
@@ -257,16 +247,22 @@ test('start requests analytics.readonly only when GA4_ENABLED=true', async () =>
   const offScope = new URL(offRes.headers.get('location')!).searchParams.get('scope')!.split(' ');
   assert.ok(offScope.includes(GOOGLE_SCOPE_READONLY));
   assert.ok(!offScope.includes(GOOGLE_SCOPE_ANALYTICS_READONLY));
+  assert.equal(new URL(offRes.headers.get('location')!).searchParams.get('include_granted_scopes'), 'true');
 
-  const on = setup({ GA4_ENABLED: 'true' });
-  const onRes = await on.call('/auth/google');
+  const legacyFlag = setup({ GA4_ENABLED: 'true' });
+  const legacyRes = await legacyFlag.call('/auth/google');
+  const legacyScope = new URL(legacyRes.headers.get('location')!).searchParams.get('scope')!.split(' ');
+  assert.ok(!legacyScope.includes(GOOGLE_SCOPE_ANALYTICS_READONLY));
+
+  const on = setup();
+  const onRes = await on.call('/auth/google?ga4=1');
   const onScope = new URL(onRes.headers.get('location')!).searchParams.get('scope')!.split(' ');
   assert.ok(onScope.includes(GOOGLE_SCOPE_READONLY));
   assert.ok(onScope.includes(GOOGLE_SCOPE_ANALYTICS_READONLY));
   assert.ok(onScope.includes('openid'));
 });
 
-test('callback refuses a grant without analytics.readonly when GA4_ENABLED=true', async () => {
+test('callback refuses a grant without analytics.readonly when ?ga4=1 asked for it', async () => {
   const kv = new MemoryKv();
   setEnvSource({
     MCP_AUTH_MODE: 'bearer',
@@ -276,12 +272,11 @@ test('callback refuses a grant without analytics.readonly when GA4_ENABLED=true'
     GOOGLE_CLIENT_SECRET: 'client-secret',
     GSC_TOKENS: kv,
     TOKEN_ENCRYPTION_KEY: KEY,
-    GA4_ENABLED: 'true',
   });
   const app = buildApp('worker');
   const call = (path: string) =>
     app.request(`https://${HOST}${path}`, { headers: { host: HOST, authorization: `Bearer ${TOKEN}` } });
-  const start = await call('/auth/google');
+  const start = await call('/auth/google?ga4=1');
   const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -295,6 +290,7 @@ test('callback refuses a grant without analytics.readonly when GA4_ENABLED=true'
   const body = await res.text();
   assert.match(body, /insufficient_scope/);
   assert.match(body, /Google Analytics/);
+  assert.match(body, /\/auth\/google\?ga4=1/);
   assert.equal([...kv.data.keys()].some((k) => k.startsWith('google:account:') || k === 'google:refresh-token'), false);
 });
 
@@ -532,7 +528,7 @@ test('a cached 401 is retried once with a fresh access token', async () => {
     tokenCalls++;
     return Response.json({ access_token: `at-${tokenCalls}`, expires_in: 3600 });
   }) as typeof fetch;
-  setEnvSource({ GA4_ENABLED: 'true', GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
+  setEnvSource({ GOOGLE_CLIENT_ID: CLIENT, GOOGLE_CLIENT_SECRET: 'sec' });
   const config = parseConfig();
   const tokenProvider = new TokenProvider(config.google, tokenFetch, { store });
   const { calls, fetchImpl } = mockFetch((call) => {

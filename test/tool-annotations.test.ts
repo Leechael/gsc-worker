@@ -30,7 +30,6 @@ after(() => setEnvSource(process.env as Record<string, unknown>));
 /** Every engine enabled, so all engine tools get registered. */
 function allTools(): Record<string, RegisteredTool> {
   setEnvSource({
-    GA4_ENABLED: 'true',
     BING_API_KEY: 'test-bing-key',
     INDEXNOW_KEY: 'a1b2c3d4e5f6a7b8',
     YANDEX_OAUTH_TOKEN: 'test-yandex-token',

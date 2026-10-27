@@ -3,7 +3,7 @@
  * Yandex, Seznam, and Google Analytics 4).
  *
  * Each engine is opt-in: its tools are registered only when enabled() is true
- * (a secret or, for GA4, GA4_ENABLED). Write and destructive tools reuse the
+ * (a secret; GA4 is always on and gated by the Google grant). Write and destructive tools reuse the
  * scope tier from GSC_SCOPES / GSC_ALLOW_DESTRUCTIVE, so one switch governs
  * every engine. GA4 itself is read-only.
  */
@@ -25,13 +25,8 @@ export interface EngineModule {
   id: string;
   /** Human-readable name for diagnostics. */
   label: string;
-  /** The secret/var that enables the engine (named in diagnostics, never its value). */
-  enableVar: string;
-  /**
-   * Override the default get_capabilities hint ("set the {enableVar} secret").
-   * Use when the engine is a flag rather than a secret (GA4_ENABLED).
-   */
-  enableHint?: string;
+  /** The secret that enables the engine (named in diagnostics, never its value). Absent when always on. */
+  enableVar?: string;
   /** True when the engine's secret is configured. */
   enabled(config: Config): boolean;
   /** Extra non-secret status lines for get_capabilities (e.g. config problems). */

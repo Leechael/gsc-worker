@@ -49,12 +49,7 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
       // readonly covers the read tier; the full webmasters scope covers write
       // and destructive tiers.
       const neededScope = tier === 'read' ? 'readonly' : 'full';
-      const ga4Flag = svc.config.ga4Enabled ? ' --ga4' : '';
       const whoMay = authorizeRequirement(svc.config);
-      const ga4Note = svc.config.ga4Enabled
-        ? `\nThis deployment has GA4_ENABLED=true, so consent must also include analytics.readonly. ` +
-          `A Search Console-only token will not run ga4_* tools until you re-consent.`
-        : '';
       return textResult(
         `On Cloudflare Workers with the GSC_TOKENS KV binding, re-authorize in a browser:
   open https://<worker-host>/auth/google (check status at /auth/google/status).
@@ -62,13 +57,14 @@ Only the deployment's operator can do this: it takes ${whoMay}. Anyone else gets
 so if that is not you, ask the operator.
 The new token replaces the stored token of the same Google account; signing in as another account adds it
 (tools then pick the account per property). Stored accounts take precedence over GOOGLE_REFRESH_TOKEN as the default.
-${ga4Note}
+To also grant Google Analytics (for ga4_* tools), open https://<worker-host>/auth/google?ga4=1 instead.
 
 Otherwise this server uses credentials from its environment (no browser access here).
 To switch Google account or re-authorize at the current tier (${tier}), run locally:
 
-  npm run auth -- --scopes ${neededScope}${ga4Flag} \\
+  npm run auth -- --scopes ${neededScope} \\
     --client-secrets path/to/client_secrets.json --out gsc-credentials.json
+  (add --ga4 to also grant Google Analytics for ga4_* tools)
 
 Scope tiers: readonly → read tools only; full → + submit_sitemap (GSC_SCOPES=full); ` +
         `+ add_site/delete_site/delete_sitemap (also GSC_ALLOW_DESTRUCTIVE=true).

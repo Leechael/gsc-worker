@@ -31,7 +31,7 @@ const TIER_TOOLS: Record<string, string[]> = {
 };
 
 /** One line per connected Google account; never prints tokens. */
-function googleAccountLines(accounts: AccountStatus[], ga4Enabled: boolean): string[] {
+function googleAccountLines(accounts: AccountStatus[]): string[] {
   if (accounts.length === 0) return [];
   const lines = [`GOOGLE ACCOUNTS (${accounts.length}; tools pick the account with the highest permission on each property):`];
   for (const a of accounts) {
@@ -43,7 +43,7 @@ function googleAccountLines(accounts: AccountStatus[], ga4Enabled: boolean): str
         : granted.split(/\s+/).includes(GOOGLE_SCOPE_FULL)
           ? 'granted scope full'
           : 'granted scope readonly';
-    if (ga4Enabled && granted != null) {
+    if (granted != null) {
       scope += hasAnalyticsReadScope(granted) ? ', analytics' : ', no analytics';
     }
     const details = [a.source, scope, a.stored ? `added ${a.stored.storedAt}` : null].filter(Boolean).join(', ');
@@ -91,12 +91,6 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
             `\n⚠️ The granted scope (${granted}) does not cover the configured GSC_SCOPES; ` +
             'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
         }
-        if (svc.config.ga4Enabled && granted !== null && !hasAnalyticsReadScope(granted)) {
-          authStatus +=
-            '\n⚠️ GA4_ENABLED is on, but this account\'s grant does not include analytics.readonly. ' +
-            'ga4_* tools will refuse until you re-authorize at https://<worker-host>/auth/google ' +
-            '(keep Google Analytics checked on the consent screen).';
-        }
       }
       const tokenSource = {
         kv: `kv (authorized in-Worker via /auth/google${status.stored ? `, stored ${status.stored.storedAt}` : ''}${status.stored?.email ? `, account ${status.stored.email}` : ''})`,
@@ -113,7 +107,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         'AUTH STATUS:',
         authStatus,
         `TOKEN SOURCE: ${tokenSource}`,
-        ...googleAccountLines(status.accounts, svc.config.ga4Enabled),
+        ...googleAccountLines(status.accounts),
         '',
         'GETTING STARTED:',
         '1. Fix auth if needed (see AUTH STATUS).',

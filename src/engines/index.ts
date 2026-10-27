@@ -24,14 +24,13 @@ const TIER_HINT = {
 /** get_capabilities section: which engines are enabled. Never prints secret values. */
 export function engineCapabilityLines(config: Config): string[] {
   if (ENGINES.length === 0) return [];
-  const lines: string[] = ['', 'OPT-IN ENGINES (tools appear only when configured):'];
+  const lines: string[] = ['', 'OPTIONAL ENGINES:'];
   for (const engine of ENGINES) {
     if (!engine.enabled(config)) {
-      const hint = engine.enableHint ?? `set the ${engine.enableVar} secret to enable ${engine.id}_* tools`;
-      lines.push(`- ${engine.label}: not configured (${hint})`);
+      lines.push(`- ${engine.label}: not configured (set the ${engine.enableVar} secret to enable ${engine.id}_* tools)`);
       continue;
     }
-    lines.push(`- ${engine.label}: enabled (${engine.enableVar} is set)`);
+    lines.push(`- ${engine.label}: enabled${engine.enableVar ? ` (${engine.enableVar} is set)` : ''}`);
     for (const extra of engine.statusLines(config)) lines.push(`    ${extra}`);
     for (const tool of engine.tools) {
       const gated = tool.tier !== 'read' && !tierAllows(config.scopeTier, tool.tier);
