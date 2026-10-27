@@ -30,21 +30,18 @@
     { "binding": "GSC_TOKENS", "id": "REPLACE_ME_KV_NAMESPACE_ID" }
   ],
 
+  // Authentication follows what is set: CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD enable the
+  // Cloudflare Access check, the MCP_AUTH_TOKEN secret enables a bearer check; both set means both must pass.
   "vars": {
-    "MCP_AUTH_MODE": "cf-access",
     // REPLACE_ME: same hostname as in "routes" (comma-separate several).
     "MCP_ALLOWED_HOSTS": "gsc-mcp.example.com",
     // REPLACE_ME: <team> is the team name shown under Zero Trust → Settings.
     "CF_ACCESS_TEAM_DOMAIN": "https://REPLACE_ME.cloudflareaccess.com",
     // REPLACE_ME: Access application → Overview → Application Audience (AUD) Tag.
     "CF_ACCESS_AUD": "REPLACE_ME_ACCESS_AUD_TAG",
-    // readonly (default) or full. Changing it requires re-opening /auth/google.
-    "GSC_SCOPES": "readonly",
     // Optional:
-    // "GSC_ALLOW_DESTRUCTIVE": "false",
+    // "TOOL_TIER": "read",  // read (default), write, or destructive; write and up: re-open /auth/google
     // "GSC_DATA_STATE": "all",
-    // "CF_ACCESS_ALLOWED_EMAILS": "you@example.com",
-    // "CF_ACCESS_ALLOWED_SERVICE_TOKENS": "ci-bot",
     // "GOOGLE_AUTH_ADMINS": "you@example.com",  // who may connect/disconnect Google
     // "GOOGLE_REDIRECT_URI": "https://gsc-mcp.example.com/auth/google/callback"
   }
@@ -53,9 +50,11 @@
   //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   Google OAuth client, type "Web application"
   //   TOKEN_ENCRYPTION_KEY                     base64 of 32 random bytes
   //   GOOGLE_REFRESH_TOKEN                     optional fallback when nothing is stored in KV
-  //   MCP_AUTH_TOKEN                           only with MCP_AUTH_MODE=bearer
+  //   MCP_AUTH_TOKEN                           optional bearer token (at least 32 bytes)
   //
-  // Optional search engines (tools appear only when the secret is set):
+  // Google Analytics 4 (ga4_* tools) needs no setting here: enable the Analytics Admin + Data APIs in the
+  // GCP project, give the Google user Viewer on each GA4 property, then open /auth/google?ga4=1.
+  // Optional search-engine secrets (tools appear only when the secret is set):
   //   BING_API_KEY                             Bing Webmaster Tools > Settings > API access > Generate API Key
   //                                            npx wrangler secret put BING_API_KEY
   //   INDEXNOW_KEY                             your IndexNow key; host it at https://<host>/<key>.txt
@@ -64,6 +63,6 @@
   //   (optional var INDEXNOW_HOSTS: hosts indexnow_check_key_file may fetch, e.g. "example.com,www.example.com")
   //   YANDEX_OAUTH_TOKEN                       oauth.yandex.com token (webmaster:hostinfo, webmaster:verify); expires in ~6 months
   //                                            npx wrangler secret put YANDEX_OAUTH_TOKEN
-  //   SEZNAM_API_KEYS                          JSON {"site":"key"} of per-site keys from reporter.seznam.cz/wm > site > API
-  //                                            npx wrangler secret put SEZNAM_API_KEYS   (or SEZNAM_API_KEY for one site)
+  //   SEZNAM_API_KEY                           per-site key from reporter.seznam.cz/wm > site > API, or JSON {"site":"key"}
+  //                                            npx wrangler secret put SEZNAM_API_KEY
 }

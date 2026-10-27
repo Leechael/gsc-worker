@@ -74,7 +74,7 @@ function indexNowServer(env: Record<string, unknown>, respond: (call: Call) => R
   return { calls, run };
 }
 
-const FULL = { GSC_SCOPES: 'full' };
+const FULL = { TOOL_TIER: 'write' };
 
 // ---------- opt-in registration ----------
 
@@ -105,7 +105,7 @@ test('get_capabilities reports IndexNow status without revealing the key', async
   const on = await text({ INDEXNOW_KEY: KEY, INDEXNOW_KEY_LOCATION: `https://example.com/keys/${KEY}.txt` });
   assert.match(on, /IndexNow: enabled \(INDEXNOW_KEY is set\)/);
   assert.match(on, /Key file: INDEXNOW_KEY_LOCATION=https:\/\/example.com\/keys\/<INDEXNOW_KEY>.txt/);
-  assert.match(on, /indexnow_submit_urls \[write\].*not enabled at the current tier: needs GSC_SCOPES=full/);
+  assert.match(on, /indexnow_submit_urls \[write\].*not enabled at the current tier: needs TOOL_TIER=write/);
   assert.match(on, /indexnow_check_key_file \[read\]/);
   assert.ok(!on.includes(KEY));
 
@@ -226,11 +226,11 @@ test('indexnow_submit_urls is gated at the read tier and does not call the netwo
   const res = await run('indexnow_submit_urls', { urls: ['https://example.com/a'] });
   assert.equal(res.isError, true);
   assert.match(res.content[0]!.text, /indexnow_submit_urls changes data in IndexNow.*\(read\)/s);
-  assert.match(res.content[0]!.text, /GSC_SCOPES=full/);
+  assert.match(res.content[0]!.text, /TOOL_TIER=write/);
   assert.equal(calls.length, 0);
 
   // Destructive tier also allows write tools.
-  const d = indexNowServer({ ...FULL, GSC_ALLOW_DESTRUCTIVE: 'true' });
+  const d = indexNowServer({ ...FULL, TOOL_TIER: 'destructive' });
   assert.equal((await d.run('indexnow_submit_urls', { urls: ['https://example.com/a'] })).isError, undefined);
 });
 

@@ -65,7 +65,7 @@ const json = (r: ToolResult) => JSON.parse(r.content[0]!.text) as Record<string,
 const ALL = SEZNAM_TOOLS.map((t) => t.name);
 
 test('seznam tools are not registered without a key', () => {
-  for (const env of [{}, { SEZNAM_API_KEYS: 'not json' }, { SEZNAM_API_KEYS: '{}' }, { SEZNAM_API_KEY: '  ' }]) {
+  for (const env of [{}, { SEZNAM_API_KEY: '{not json' }, { SEZNAM_API_KEY: '{}' }, { SEZNAM_API_KEY: '  ' }]) {
     setEnvSource(env);
     const names = Object.keys(toolsOf(buildMcpServer()));
     assert.ok(names.includes('list_properties'));
@@ -73,8 +73,8 @@ test('seznam tools are not registered without a key', () => {
   }
 });
 
-test('all seznam tools are registered with SEZNAM_API_KEYS or SEZNAM_API_KEY', () => {
-  for (const env of [{ SEZNAM_API_KEYS: KEYS }, { SEZNAM_API_KEY: KEY_CZ }]) {
+test('all seznam tools are registered with a JSON or single SEZNAM_API_KEY', () => {
+  for (const env of [{ SEZNAM_API_KEY: KEYS }, { SEZNAM_API_KEY: KEY_CZ }]) {
     setEnvSource(env);
     const names = Object.keys(toolsOf(buildMcpServer())).filter((n) => n.startsWith('seznam_'));
     assert.deepEqual(names.sort(), [...ALL].sort());
@@ -91,20 +91,22 @@ test('the engine registry wires Seznam in, and SEZNAM_ settings reach config.eng
   assert.equal(config.engineEnv.SEZNAM_API_KEY, KEY_CZ);
   assert.equal(config.engineEnv.UNRELATED, undefined);
   assert.equal(seznamEngine.enabled(config), true);
-  setEnvSource({ SEZNAM_API_KEYS: 'not json' });
+  setEnvSource({ SEZNAM_API_KEY: '{not json' });
   assert.equal(seznamEngine.enabled(parseConfig()), false);
 });
 
 test('site map parsing normalizes labels and reports bad entries without keys', () => {
-  setEnvSource({ SEZNAM_API_KEYS: JSON.stringify({ 'Example.cz/': KEY_CZ, 'bad site/path': 'k', 'empty.cz': '' }), SEZNAM_API_KEY: KEY_SHOP });
+  setEnvSource({ SEZNAM_API_KEY: JSON.stringify({ 'Example.cz/': KEY_CZ, 'bad site/path': 'k', 'empty.cz': '' }) });
   const { sites, error } = parseSeznamSites(parseConfig());
-  assert.deepEqual(sites.map((s) => [s.label, s.host, s.protocol]), [['example.cz', 'example.cz', null], ['default', null, null]]);
+  assert.deepEqual(sites.map((s) => [s.label, s.host, s.protocol]), [['example.cz', 'example.cz', null]]);
   assert.match(error!, /bad site\/path, empty\.cz/);
-  assert.doesNotMatch(error!, new RegExp(`${KEY_CZ}|${KEY_SHOP}`));
+  assert.doesNotMatch(error!, new RegExp(KEY_CZ));
+  setEnvSource({ SEZNAM_API_KEY: ` ${KEY_SHOP} ` });
+  assert.deepEqual(parseSeznamSites(parseConfig()).sites.map((s) => [s.label, s.key]), [['default', KEY_SHOP]]);
 });
 
 test('key selection by site label, by URL host and protocol, and fallback', () => {
-  setEnvSource({ SEZNAM_API_KEYS: KEYS });
+  setEnvSource({ SEZNAM_API_KEY: KEYS });
   const { sites } = parseSeznamSites(parseConfig());
   assert.equal(selectSite(sites, 'example.cz').key, KEY_CZ);
   assert.equal(selectSite(sites, 'https://EXAMPLE.cz/').key, KEY_CZ);
@@ -113,13 +115,10 @@ test('key selection by site label, by URL host and protocol, and fallback', () =
   assert.throws(() => selectSite(sites, null), /several Seznam sites are configured \(example\.cz, https:\/\/shop\.example\.cz\)/);
   assert.throws(() => selectSite(sites, 'other.cz'), /not configured/);
 
-  setEnvSource({ SEZNAM_API_KEYS: KEYS, SEZNAM_API_KEY: 'fallback' });
-  const withDefault = parseSeznamSites(parseConfig()).sites;
-  assert.equal(selectSite(withDefault, null, 'https://other.cz/').key, 'fallback');
-  assert.equal(selectSite(withDefault, null).key, 'fallback');
-
   setEnvSource({ SEZNAM_API_KEY: 'only' });
-  assert.equal(selectSite(parseSeznamSites(parseConfig()).sites, null).key, 'only');
+  const single = parseSeznamSites(parseConfig()).sites;
+  assert.equal(selectSite(single, null).key, 'only');
+  assert.equal(selectSite(single, null, 'https://other.cz/').key, 'only');
 });
 
 async function capabilitiesText(env: Record<string, unknown>): Promise<string> {
@@ -132,20 +131,20 @@ async function capabilitiesText(env: Record<string, unknown>): Promise<string> {
 }
 
 test('get_capabilities reports Seznam status and site labels, never keys', async () => {
-  assert.match(await capabilitiesText({}), /- Seznam Webmaster: not configured \(set the SEZNAM_API_KEYS or SEZNAM_API_KEY secret to enable seznam_\* tools\)/);
-  const on = await capabilitiesText({ SEZNAM_API_KEYS: KEYS });
+  assert.match(await capabilitiesText({}), /- Seznam Webmaster: not configured \(set the SEZNAM_API_KEY secret to enable seznam_\* tools\)/);
+  const on = await capabilitiesText({ SEZNAM_API_KEY: KEYS });
   assert.match(on, /- Seznam Webmaster: enabled/);
   assert.match(on, /Sites with a key: example\.cz, https:\/\/shop\.example\.cz\./);
   assert.match(on, /- seznam_get_documents \[read\]: /);
-  assert.match(on, /- seznam_reindex_url \[write\]: .*\(not enabled at the current tier: needs GSC_SCOPES=full\)/);
+  assert.match(on, /- seznam_reindex_url \[write\]: .*\(not enabled at the current tier: needs TOOL_TIER=write\)/);
   assert.doesNotMatch(on, new RegExp(`${KEY_CZ}|${KEY_SHOP}`));
-  const partial = await capabilitiesText({ SEZNAM_API_KEYS: JSON.stringify({ 'example.cz': KEY_CZ, 'bad site/path': 'k' }), GSC_SCOPES: 'full' });
-  assert.match(partial, /Warning: SEZNAM_API_KEYS: ignored entries[^\n]*bad site\/path/);
+  const partial = await capabilitiesText({ SEZNAM_API_KEY: JSON.stringify({ 'example.cz': KEY_CZ, 'bad site/path': 'k' }), TOOL_TIER: 'write' });
+  assert.match(partial, /Warning: SEZNAM_API_KEY: ignored entries[^\n]*bad site\/path/);
   assert.doesNotMatch(partial, /seznam_reindex_url \[write\]: .*not enabled/);
 });
 
 test('seznam_list_sites lists labels only', async () => {
-  const { call, calls } = harness({ SEZNAM_API_KEYS: KEYS }, () => undefined);
+  const { call, calls } = harness({ SEZNAM_API_KEY: KEYS }, () => undefined);
   const r = await call('seznam_list_sites', {});
   assert.deepEqual((json(r).sites as unknown[]), [{ site: 'example.cz' }, { site: 'https://shop.example.cz' }]);
   assert.doesNotMatch(r.content[0]!.text, new RegExp(`${KEY_CZ}|${KEY_SHOP}`));
@@ -160,7 +159,7 @@ test('requests use the site key as the key query parameter', async () => {
     redirect: { count: 1, urls: ['https://example.cz/r'] },
     error: { count: 2, urls: ['https://example.cz/x', 'https://example.cz/y'] },
   };
-  const { call, calls } = harness({ SEZNAM_API_KEYS: KEYS }, () => ({ body: docs }));
+  const { call, calls } = harness({ SEZNAM_API_KEY: KEYS }, () => ({ body: docs }));
   const r = await call('seznam_get_documents', { site: 'example.cz', categories: ['error', 'content'], url_limit: 2 });
   assert.equal(r.isError, undefined);
   assert.deepEqual(json(r), {
@@ -213,7 +212,7 @@ test('history validates dates and passes them through', async () => {
 });
 
 test('seznam_get_document picks the key from the URL and normalizes the page', async () => {
-  const { call, calls } = harness({ SEZNAM_API_KEYS: KEYS }, () => ({
+  const { call, calls } = harness({ SEZNAM_API_KEY: KEYS }, () => ({
     body: {
       url: 'https://shop.example.cz/p', title: 'P', indexTimestamp: 1760000000, downloadTimestamp: 1760000100,
       isIndexed: true, isError: false, isRedirect: false, meta: { author: '', desc: 'd', keywords: '' },
@@ -241,12 +240,12 @@ test('204 means data not available yet, not an error', async () => {
 test('401, 404, 429 and 503 errors are explained and never leak the key', async () => {
   const echo = (status: number) => ({ status, raw: JSON.stringify({ title: 'Problem', detail: `bad request to /wm-api/web?key=${KEY_CZ}&x=1 (${KEY_CZ})`, status }) });
   for (const [status, pattern] of [
-    [401, /rejected the API key \(site example\.cz\) \(HTTP 401\).*reporter\.seznam\.cz\/wm\/.*wrangler secret put SEZNAM_API_KEYS/],
+    [401, /rejected the API key \(site example\.cz\) \(HTTP 401\).*reporter\.seznam\.cz\/wm\/.*wrangler secret put SEZNAM_API_KEY/],
     [404, /found no data for the site or page \(HTTP 404\)/],
     [429, /rate limit.*5 requests per second and 100 per minute.*500 times a day/],
     [503, /unavailable \(HTTP 503\)/],
   ] as const) {
-    const { call, calls } = harness({ SEZNAM_API_KEYS: JSON.stringify({ 'example.cz': KEY_CZ }) }, () => echo(status));
+    const { call, calls } = harness({ SEZNAM_API_KEY: JSON.stringify({ 'example.cz': KEY_CZ }) }, () => echo(status));
     const r = await call('seznam_get_documents', {});
     assert.equal(r.isError, true, String(status));
     assert.match(r.content[0]!.text, pattern);
@@ -260,12 +259,12 @@ test('reindex is gated at the read tier and calls nothing', async () => {
   const { call, calls } = harness({ SEZNAM_API_KEY: KEY_CZ }, () => undefined);
   const r = await call('seznam_reindex_url', { url: 'https://example.cz/p' });
   assert.equal(r.isError, true);
-  assert.match(r.content[0]!.text, /Safety: seznam_reindex_url changes data in Seznam Webmaster and is disabled at the current scope tier \(read\)[\s\S]*needs write rights/);
+  assert.match(r.content[0]!.text, /Safety: seznam_reindex_url changes data in Seznam Webmaster and is disabled at the current tool tier \(read\)[\s\S]*needs write rights/);
   assert.equal(calls.length, 0);
 });
 
 test('reindex at the write tier POSTs key and url as query parameters', async () => {
-  const { call, calls } = harness({ SEZNAM_API_KEYS: KEYS, GSC_SCOPES: 'full' }, () => ({ raw: '' }));
+  const { call, calls } = harness({ SEZNAM_API_KEY: KEYS, TOOL_TIER: 'write' }, () => ({ raw: '' }));
   const r = await call('seznam_reindex_url', { url: 'https://example.cz/new' });
   assert.deepEqual(json(r), { site: 'example.cz', requested: true, url: 'https://example.cz/new' });
   const c = calls[0]!;
@@ -276,7 +275,7 @@ test('reindex at the write tier POSTs key and url as query parameters', async ()
 });
 
 test('reindex 403 explains that the key needs write rights', async () => {
-  const { call } = harness({ SEZNAM_API_KEY: KEY_CZ, GSC_SCOPES: 'full' }, () => ({ status: 403, body: { title: 'Forbidden', status: 403 } }));
+  const { call } = harness({ SEZNAM_API_KEY: KEY_CZ, TOOL_TIER: 'write' }, () => ({ status: 403, body: { title: 'Forbidden', status: 403 } }));
   const r = await call('seznam_reindex_url', { url: 'https://example.cz/p' });
   assert.equal(r.isError, true);
   assert.match(r.content[0]!.text, /needs a key with write rights/);

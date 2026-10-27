@@ -1,20 +1,22 @@
 /**
- * Shared plumbing for search engines other than Google (src/engines/<id>/).
+ * Shared plumbing for opt-in engines in src/engines/<id>/ (Bing, IndexNow,
+ * Yandex, Seznam, and Google Analytics 4).
  *
- * Each engine is opt-in: its tools are registered only when its secret is
- * configured (see enabled()). Write and destructive tools reuse the scope tier
- * from GSC_SCOPES / GSC_ALLOW_DESTRUCTIVE, so one switch governs every engine.
+ * Each engine is opt-in: its tools are registered only when enabled() is true
+ * (a secret; GA4 is always on and gated by the Google grant). Write and destructive tools reuse the
+ * tool tier from TOOL_TIER, so one switch governs
+ * every engine. GA4 itself is read-only.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { Config, ScopeTier } from '../lib/config.js';
 import type { ServerServices } from '../mcp/context.js';
 import { tierGateMessage } from '../tools/helpers.js';
+import type { ToolPolicy, ToolTier } from '../mcp/tool-annotations.js';
 
-export type EngineTier = 'read' | 'write' | 'destructive';
+export type EngineTier = ToolTier;
 
-export interface EngineToolInfo {
-  name: string;
-  tier: EngineTier;
+/** Tool table entry; also the source of the tool's MCP annotations. */
+export interface EngineToolInfo extends ToolPolicy {
   summary: string;
 }
 
@@ -23,8 +25,8 @@ export interface EngineModule {
   id: string;
   /** Human-readable name for diagnostics. */
   label: string;
-  /** The secret/var that enables the engine (named in diagnostics, never its value). */
-  enableVar: string;
+  /** The secret that enables the engine (named in diagnostics, never its value). Absent when always on. */
+  enableVar?: string;
   /** True when the engine's secret is configured. */
   enabled(config: Config): boolean;
   /** Extra non-secret status lines for get_capabilities (e.g. config problems). */
@@ -54,20 +56,10 @@ export function engineTierGate(
   engineLabel: string,
 ): string | null {
   if (tierGateMessage(tier, tool, required) === null) return null;
-  const googleNote =
-    '  Note: GSC_SCOPES=full also switches the Google grant to the full "webmasters" scope; ' +
-    're-authorize Google (/auth/google on Workers, or npm run auth -- --scopes full) or Google write tools will fail.';
-  if (required === 'destructive') {
-    return (
-      `Safety: ${tool} removes data from ${engineLabel} and is disabled at the current scope tier (${tier}).\n` +
-      'To enable it, set GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true in the server environment and restart (or redeploy).\n' +
-      googleNote
-    );
-  }
+  const verb = required === 'destructive' ? 'removes data from' : 'changes data in';
   return (
-    `Safety: ${tool} changes data in ${engineLabel} and is disabled at the current scope tier (${tier}).\n` +
-    'To enable it, set GSC_SCOPES=full in the server environment and restart (or redeploy).\n' +
-    googleNote
+    `Safety: ${tool} ${verb} ${engineLabel} and is disabled at the current tool tier (${tier}).\n` +
+    `To enable it, set TOOL_TIER=${required} in the server environment and restart (or redeploy).`
   );
 }
 

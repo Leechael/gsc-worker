@@ -17,25 +17,28 @@ export const GOOGLE_CALLBACK_PATH = '/auth/google/callback';
 export type EntryKind = 'node' | 'worker' | 'stdio';
 export type ScopeTier = 'read' | 'write' | 'destructive';
 export type DataState = 'all' | 'final';
-export type AuthMode = 'cf-access' | 'bearer' | 'oauth' | 'none';
+export type AuthMode = 'cf-access' | 'bearer' | 'none';
 
 export const GOOGLE_SCOPE_READONLY = 'https://www.googleapis.com/auth/webmasters.readonly';
 export const GOOGLE_SCOPE_FULL = 'https://www.googleapis.com/auth/webmasters';
+export const GOOGLE_SCOPE_ANALYTICS_READONLY = 'https://www.googleapis.com/auth/analytics.readonly';
+export const GOOGLE_SCOPE_ANALYTICS = 'https://www.googleapis.com/auth/analytics';
+export const GOOGLE_SCOPE_ANALYTICS_EDIT = 'https://www.googleapis.com/auth/analytics.edit';
 
 export interface CfAccessConfig {
   teamDomain: string;
   aud: string[];
-  allowedEmails: string[];
-  allowedServiceTokens: string[];
 }
 
+/**
+ * Checks derived from what is configured, all of which must pass:
+ * cf-access when CF_ACCESS_TEAM_DOMAIN or CF_ACCESS_AUD is set, bearer when
+ * MCP_AUTH_TOKEN is set. Neither gives 'none', which startup validation only
+ * allows on a loopback Node binding.
+ */
 export interface AuthConfig {
-  /** Raw MCP_AUTH_MODE value. */
-  rawMode: string;
   modes: AuthMode[];
   bearerToken?: string;
-  /** Header name for bearer mode (default 'authorization'). */
-  bearerHeader: string;
   cfAccess?: CfAccessConfig;
 }
 
@@ -66,12 +69,14 @@ export interface GoogleAuthStorageConfig {
 export interface Config {
   google: GoogleConfig;
   googleAuth: GoogleAuthStorageConfig;
+  /** TOOL_TIER (read|write|destructive), default 'read'. */
   scopeTier: ScopeTier;
+  /** TOOL_TIER held a value other than read/write/destructive (treated as read). */
+  invalidTier?: string;
+  /** Removed settings still present in the environment (named in a startup warning). */
+  removedVars: string[];
   /** GSC_DATA_STATE (all|final), default 'all' (matches GSC dashboard). */
   dataState: DataState;
-  allowDestructive: boolean;
-  /** GSC_SKIP_OAUTH was set: recognized, ignored, warned (TS v1 has no service account). */
-  skipOAuthWarn: boolean;
   auth: AuthConfig;
   /** MCP_HOST — bind address for the Node entry. */
   host: string;
@@ -120,54 +125,53 @@ function envList(key: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-function parseBool(key: string): boolean {
-  return ['true', '1', 'yes'].includes((env(key) ?? '').toLowerCase());
+const SCOPE_TIERS: ScopeTier[] = ['read', 'write', 'destructive'];
+
+/** Settings that no longer exist; a leftover one is named in a startup warning. */
+const REMOVED_VARS: Record<string, string> = {
+  GSC_SCOPES: 'use TOOL_TIER=read|write|destructive',
+  GSC_ALLOW_DESTRUCTIVE: 'use TOOL_TIER=destructive',
+  GA4_ENABLED: 'grant Analytics per account at /auth/google?ga4=1',
+  MCP_AUTH_MODE: 'the checks follow CF_ACCESS_* and MCP_AUTH_TOKEN',
+  MCP_BEARER_HEADER: 'send the token in Authorization: Bearer',
+  CF_ACCESS_ALLOWED_EMAILS: 'restrict users in the Access policy',
+  CF_ACCESS_ALLOWED_SERVICE_TOKENS: 'restrict service tokens in the Access policy',
+  GSC_SKIP_OAUTH: 'it never had an effect',
+  SEZNAM_API_KEYS: 'put the JSON object in SEZNAM_API_KEY',
+};
+
+/** Message for removed settings found in the environment, or null. */
+export function removedVarsWarning(names: string[]): string | null {
+  if (names.length === 0) return null;
+  return `Ignoring removed settings: ${names.map((n) => `${n} (${REMOVED_VARS[n]})`).join('; ')}.`;
 }
 
-const AUTH_MODES: AuthMode[] = ['cf-access', 'bearer', 'oauth', 'none'];
-
 export function parseConfig(): Config {
-  // --- Google auth ---
-  const scopeSetting = (env('GSC_SCOPES') ?? 'readonly').toLowerCase().trim();
-  const allowDestructive = parseBool('GSC_ALLOW_DESTRUCTIVE');
-  let scopes: string[];
-  let scopeTier: ScopeTier;
-  if (scopeSetting === 'full') {
-    scopes = [GOOGLE_SCOPE_FULL];
-    scopeTier = allowDestructive ? 'destructive' : 'write';
-  } else {
-    scopes = [GOOGLE_SCOPE_READONLY];
-    scopeTier = 'read';
-  }
+  // --- tool tier and Google scope ---
+  const rawTier = (env('TOOL_TIER') ?? 'read').toLowerCase().trim();
+  const validTier = (SCOPE_TIERS as string[]).includes(rawTier);
+  const scopeTier: ScopeTier = validTier ? (rawTier as ScopeTier) : 'read';
+  // Google write tools need the full webmasters scope; other engines' keys do not depend on it.
+  const scopes = [scopeTier === 'read' ? GOOGLE_SCOPE_READONLY : GOOGLE_SCOPE_FULL];
 
   // --- GSC_DATA_STATE ---
   const rawDataState = (env('GSC_DATA_STATE') ?? 'all').toLowerCase().trim();
   const dataState: DataState = rawDataState === 'final' ? 'final' : 'all';
 
-  // --- MCP auth ---
-  const rawMode = (env('MCP_AUTH_MODE') ?? '').trim();
-  const modes = envList('MCP_AUTH_MODE').filter((m): m is AuthMode =>
-    (AUTH_MODES as string[]).includes(m),
-  );
-
-  const auth: AuthConfig = {
-    rawMode,
-    modes,
-    bearerHeader: (env('MCP_BEARER_HEADER') ?? 'authorization').toLowerCase(),
-  };
-  const bearerToken = env('MCP_AUTH_TOKEN');
-  if (bearerToken) auth.bearerToken = bearerToken;
-
+  // --- MCP auth: every configured check must pass ---
+  const auth: AuthConfig = { modes: [] };
   const teamDomain = env('CF_ACCESS_TEAM_DOMAIN');
   const aud = envList('CF_ACCESS_AUD');
   if (teamDomain || aud.length > 0) {
-    auth.cfAccess = {
-      teamDomain: teamDomain ?? '',
-      aud,
-      allowedEmails: envList('CF_ACCESS_ALLOWED_EMAILS'),
-      allowedServiceTokens: envList('CF_ACCESS_ALLOWED_SERVICE_TOKENS'),
-    };
+    auth.modes.push('cf-access');
+    auth.cfAccess = { teamDomain: teamDomain ?? '', aud };
   }
+  const bearerToken = env('MCP_AUTH_TOKEN');
+  if (bearerToken) {
+    auth.modes.push('bearer');
+    auth.bearerToken = bearerToken;
+  }
+  if (auth.modes.length === 0) auth.modes.push('none');
 
   const google: GoogleConfig = { scopes };
   const clientId = env('GOOGLE_CLIENT_ID');
@@ -189,14 +193,14 @@ export function parseConfig(): Config {
     google,
     googleAuth,
     scopeTier,
+    removedVars: Object.keys(REMOVED_VARS).filter((k) => env(k) !== undefined),
     dataState,
-    allowDestructive,
-    skipOAuthWarn: env('GSC_SKIP_OAUTH') !== undefined,
     auth,
     host: env('MCP_HOST') ?? '127.0.0.1',
     port: Number.parseInt(env('MCP_PORT') ?? env('PORT') ?? '3001', 10),
     engineEnv: engineEnvFrom(currentSource),
   };
+  if (!validTier) cfg.invalidTier = rawTier;
   const allowedHosts = envList('MCP_ALLOWED_HOSTS');
   if (allowedHosts.length > 0) cfg.allowedHosts = allowedHosts;
   const allowedOrigins = envList('MCP_ALLOWED_ORIGINS');
@@ -236,56 +240,23 @@ export function isLoopbackHost(host: string): boolean {
 export function validateHttpConfig(cfg: Config, entry: 'node' | 'worker'): string[] {
   const errors: string[] = [];
 
-  if (cfg.auth.rawMode === '') {
-    errors.push('MCP_AUTH_MODE is required for HTTP deployments. Set one of: cf-access, bearer, oauth, none (comma-combinable). For local stdio use, run the stdio entry instead.');
-  } else {
-    const named = new Set(cfg.auth.rawMode.split(',').map((m) => m.trim()).filter(Boolean));
-    for (const m of named) {
-      if (!(AUTH_MODES as string[]).includes(m)) {
-        errors.push(`Unknown MCP_AUTH_MODE '${m}'. Accepted: ${AUTH_MODES.join(', ')}.`);
-      }
-    }
-    if (cfg.auth.modes.length === 0) {
-      // e.g. MCP_AUTH_MODE=',' or ', ,' — parses to zero modes; without this
-      // guard the authenticator would run zero checks and let everything
-      // through (review P1-1).
-      errors.push(`MCP_AUTH_MODE '${cfg.auth.rawMode}' contains no valid modes. Accepted: ${AUTH_MODES.join(', ')}.`);
-    }
-    if (cfg.auth.modes.includes('oauth') && cfg.auth.modes.includes('cf-access')) {
-      errors.push("MCP_AUTH_MODE cannot combine 'oauth' with 'cf-access': Access in front takes over the 401/OAuth flow (see plan §6.5.1).");
-    }
-  }
-
-  // --- per-mode config (fail closed even for not-yet-implemented modes) ---
   if (cfg.auth.modes.includes('cf-access')) {
     const cf = cfg.auth.cfAccess;
     if (!cf?.teamDomain) {
-      errors.push("MCP_AUTH_MODE 'cf-access' requires CF_ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com).");
+      errors.push('Cloudflare Access needs both CF_ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com) and CF_ACCESS_AUD; CF_ACCESS_TEAM_DOMAIN is missing.');
     }
     if (!cf || cf.aud.length === 0) {
-      errors.push("MCP_AUTH_MODE 'cf-access' requires CF_ACCESS_AUD (Access application AUD tag).");
+      errors.push('Cloudflare Access needs both CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD (Access application AUD tag); CF_ACCESS_AUD is missing.');
     }
   }
-  if (cfg.auth.modes.includes('oauth')) {
-    if (entry === 'node') {
-      errors.push("MCP_AUTH_MODE 'oauth' is only supported on the Cloudflare Workers entry (milestone M5).");
-    } else {
-      errors.push("MCP_AUTH_MODE 'oauth' is not implemented in this build (milestone M5).");
-    }
-  }
-  if (cfg.auth.modes.includes('bearer')) {
-    const token = cfg.auth.bearerToken;
-    if (!token) {
-      errors.push("MCP_AUTH_MODE 'bearer' requires MCP_AUTH_TOKEN (at least 32 bytes of random data).");
-    } else if (token.length < 32) {
-      errors.push(`MCP_AUTH_TOKEN is ${token.length} bytes; at least 32 bytes are required.`);
-    }
+  if (cfg.auth.bearerToken !== undefined && cfg.auth.bearerToken.length < 32) {
+    errors.push(`MCP_AUTH_TOKEN is ${cfg.auth.bearerToken.length} bytes; at least 32 bytes are required.`);
   }
   if (cfg.auth.modes.includes('none')) {
     if (entry === 'worker') {
-      errors.push("MCP_AUTH_MODE 'none' is forbidden on Cloudflare Workers (always public). Use cf-access or bearer.");
+      errors.push('No authentication configured. Cloudflare Workers are public: set CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD, or MCP_AUTH_TOKEN.');
     } else if (!isLoopbackHost(cfg.host)) {
-      errors.push(`MCP_AUTH_MODE 'none' requires binding to a loopback address (MCP_HOST is '${cfg.host}').`);
+      errors.push(`No authentication configured, which is only allowed on a loopback address (MCP_HOST is '${cfg.host}'). Set MCP_AUTH_TOKEN or CF_ACCESS_*.`);
     }
   }
 
@@ -349,17 +320,11 @@ export function validateHttpWarnings(cfg: Config, entry: EntryKind = 'node'): st
         "Worker's hostname is rejected with 403. Set MCP_ALLOWED_HOSTS to the Worker's public hostname(s).",
     );
   }
-  if (cfg.allowDestructive && cfg.scopeTier !== 'destructive') {
-    warnings.push(
-      'GSC_ALLOW_DESTRUCTIVE=true has no effect at the readonly scope tier: ' +
-        'destructive tools will return upgrade guidance until GSC_SCOPES=full.',
-    );
+  if (cfg.invalidTier !== undefined) {
+    warnings.push(`TOOL_TIER '${cfg.invalidTier}' is not one of read, write, destructive; using read.`);
   }
-  if (cfg.skipOAuthWarn) {
-    warnings.push(
-      'GSC_SKIP_OAUTH is set but has no effect in the TypeScript build (no service-account support; plan §6.3).',
-    );
-  }
+  const removed = removedVarsWarning(cfg.removedVars);
+  if (removed) warnings.push(removed);
   if (cfg.googleAuth?.encryptionKey && !cfg.googleAuth.kv) {
     warnings.push(
       `TOKEN_ENCRYPTION_KEY is set but no ${TOKEN_KV_BINDING} KV namespace is bound: in-Worker Google authorization (/auth/google) is disabled ` +

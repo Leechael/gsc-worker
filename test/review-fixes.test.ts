@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { SignJWT, exportJWK } from 'jose';
-import { parseConfig, validateHttpConfig } from '../src/lib/config.js';
+import { GOOGLE_SCOPE_FULL, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
 import { buildAuthenticator } from '../src/lib/mcp-auth/index.js';
 import { buildCfAccessAuthenticator } from '../src/lib/mcp-auth/cf-access.js';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -14,19 +14,29 @@ import type { ServerServices } from '../src/mcp/context.js';
 import { registerAdvancedAnalyticsTools } from '../src/tools/analytics-advanced.js';
 import { registerPropertiesTools } from '../src/tools/properties.js';
 
-// ---------- P1-1: MCP_AUTH_MODE ',' must not authenticate ----------
+// ---------- P1-1: no configured check must not authenticate ----------
 
-test('MCP_AUTH_MODE="," is rejected by startup validation', () => {
-  process.env.MCP_AUTH_MODE = ',';
-  const cfg = parseConfig();
-  const errors = validateHttpConfig(cfg, 'node');
-  assert.ok(errors.some((e) => e.includes('contains no valid modes')), errors.join('\n'));
-  delete process.env.MCP_AUTH_MODE;
+test('no authentication configured is refused on Workers and on a non-loopback Node binding', () => {
+  setEnvSource({});
+  assert.deepEqual(parseConfig().auth.modes, ['none']);
+  assert.ok(validateHttpConfig(parseConfig(), 'worker').some((e) => e.startsWith('No authentication configured')));
+  assert.deepEqual(validateHttpConfig(parseConfig(), 'node'), []);
+  setEnvSource({ MCP_HOST: '0.0.0.0', MCP_ALLOWED_HOSTS: 'mcp.example.com' });
+  assert.ok(validateHttpConfig(parseConfig(), 'node').some((e) => e.startsWith('No authentication configured')));
+  setEnvSource(process.env as Record<string, unknown>);
+});
+
+test('configured checks are all required: Access and MCP_AUTH_TOKEN together give both', () => {
+  setEnvSource({ CF_ACCESS_TEAM_DOMAIN: 'https://t.cloudflareaccess.com', CF_ACCESS_AUD: 'a', MCP_AUTH_TOKEN: 'x'.repeat(32) });
+  assert.deepEqual(parseConfig().auth.modes, ['cf-access', 'bearer']);
+  setEnvSource({ CF_ACCESS_AUD: 'a' });
+  assert.ok(validateHttpConfig(parseConfig(), 'worker').some((e) => e.includes('CF_ACCESS_TEAM_DOMAIN is missing')));
+  setEnvSource(process.env as Record<string, unknown>);
 });
 
 test('buildAuthenticator with zero modes fails closed', () => {
   const cfg = {
-    auth: { rawMode: 'none', modes: [], bearerHeader: 'authorization' },
+    auth: { modes: [] },
   } as unknown as Config;
   const result = buildAuthenticator(cfg, []);
   assert.equal(result.ok, false);
@@ -39,7 +49,7 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 20
 const kid = 'k1';
 const publicJwk = { ...(await exportJWK(publicKey)), kid, alg: 'RS256', use: 'sig' };
 const cfAuth = buildCfAccessAuthenticator(
-  { teamDomain: TEAM, aud: ['a1'], allowedEmails: [], allowedServiceTokens: [] },
+  { teamDomain: TEAM, aud: ['a1'] },
   { jwks: { keys: [publicJwk] } },
 );
 
@@ -92,7 +102,12 @@ test('add_site: PUT with empty success body is reported as success (P1-3)', asyn
     calls.push({ method: init?.method, path: String(input) });
     return Promise.resolve(new Response('', { status: 200 })); // empty body, like sites.add
   }) as typeof fetch;
-  const config = { ...parseConfig(), scopeTier: 'destructive', allowDestructive: true } as Config;
+  const parsed = parseConfig();
+  const config = {
+    ...parsed,
+    scopeTier: 'destructive' as const,
+    google: { ...parsed.google, scopes: [GOOGLE_SCOPE_FULL] },
+  } as Config;
   const svc = { config, tokenProvider, gsc: new GscClient({ tokenProvider, fetchImpl }) };
   const server = new McpServer({ name: 't', version: '0' });
   registerPropertiesTools(server, svc);
@@ -170,4 +185,17 @@ test('hourly_all without hour dimension is rejected before any API call', async 
   });
   assert.ok('error' in out);
   assert.equal(calls.length, 0);
+});
+
+test('TOOL_TIER picks the tier and Google scope; bad values and removed settings are warned about', () => {
+  setEnvSource({ TOOL_TIER: 'Destructive' });
+  assert.equal(parseConfig().scopeTier, 'destructive');
+  assert.deepEqual(parseConfig().google.scopes, [GOOGLE_SCOPE_FULL]);
+  setEnvSource({ TOOL_TIER: 'full', GSC_SCOPES: 'full', MCP_AUTH_MODE: 'bearer' });
+  const cfg = parseConfig();
+  assert.equal(cfg.scopeTier, 'read');
+  const warnings = validateHttpWarnings(cfg).join('\n');
+  assert.match(warnings, /TOOL_TIER 'full' is not one of read, write, destructive; using read/);
+  assert.match(warnings, /Ignoring removed settings: GSC_SCOPES \(use TOOL_TIER=read\|write\|destructive\); MCP_AUTH_MODE/);
+  setEnvSource(process.env as Record<string, unknown>);
 });

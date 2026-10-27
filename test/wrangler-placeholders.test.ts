@@ -46,7 +46,7 @@ test('the template stays valid when its optional vars are uncommented', () => {
   const uncommented = TEMPLATE.replace(/^(\s*)\/\/ ("[A-Z_]+": "[^"]*",?)(.*)$/gm, '$1$2$3');
   assert.match(uncommented, /^\s*"GOOGLE_REDIRECT_URI"/m);
   const vars = (JSON.parse(stripJsonc(uncommented)) as { vars: Record<string, string> }).vars;
-  assert.equal(vars.GSC_ALLOW_DESTRUCTIVE, 'false');
+  assert.equal(vars.TOOL_TIER, 'read');
   assert.ok(vars.GOOGLE_AUTH_ADMINS);
 });
 

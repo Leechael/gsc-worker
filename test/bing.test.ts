@@ -103,12 +103,12 @@ test('get_capabilities reports Bing status and tiers without revealing the key',
     assert.match(text, expect);
     assert.ok(!text.includes(KEY), 'key must not appear');
     if ('BING_API_KEY' in env) {
-      assert.match(text, /bing_submit_urls \[write\].*not enabled at the current tier: needs GSC_SCOPES=full/);
-      assert.match(text, /bing_remove_feed \[destructive\].*GSC_ALLOW_DESTRUCTIVE=true/);
+      assert.match(text, /bing_submit_urls \[write\].*not enabled at the current tier: needs TOOL_TIER=write/);
+      assert.match(text, /bing_remove_feed \[destructive\].*TOOL_TIER=destructive/);
       assert.match(text, /bing_get_query_stats \[read\]/);
     }
   }
-  const svc = services({ BING_API_KEY: KEY, GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' });
+  const svc = services({ BING_API_KEY: KEY, TOOL_TIER: 'destructive' });
   const server = new McpServer({ name: 't', version: '0' });
   registerCapabilitiesTools(server, svc);
   const text = (await toolsOf(server).get_capabilities!.executor({}, {})).content[0]!.text;
@@ -138,7 +138,7 @@ test('GET methods use the JSON endpoint, siteUrl and apikey query parameters', a
 });
 
 test('submit tools POST the documented JSON bodies', async () => {
-  const { calls, run } = bingServer({ GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' }, () => json({ d: null }));
+  const { calls, run } = bingServer({ TOOL_TIER: 'destructive' }, () => json({ d: null }));
   const one = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['https://example.com/a'] });
   assert.equal(one.isError, undefined);
   await run('bing_submit_urls', {
@@ -161,7 +161,7 @@ test('submit tools POST the documented JSON bodies', async () => {
 });
 
 test('bing_submit_urls rejects non-http URLs before calling Bing', async () => {
-  const { calls, run } = bingServer({ GSC_SCOPES: 'full' }, () => json({ d: null }));
+  const { calls, run } = bingServer({ TOOL_TIER: 'write' }, () => json({ d: null }));
   const res = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['ftp://example.com/x', 'not a url'] });
   assert.equal(res.isError, true);
   assert.equal(calls.length, 0);
@@ -178,15 +178,15 @@ test('write and destructive tools are tier-gated and never call Bing when gated'
   ] as const) {
     const res = await read.run(tool, args);
     assert.equal(res.isError, true, tool);
-    assert.match(res.content[0]!.text, /GSC_SCOPES=full/);
+    assert.match(res.content[0]!.text, /TOOL_TIER=(write|destructive)/);
   }
   assert.equal(read.calls.length, 0);
 
-  const write = bingServer({ GSC_SCOPES: 'full' }, () => json({ d: null }));
+  const write = bingServer({ TOOL_TIER: 'write' }, () => json({ d: null }));
   assert.equal((await write.run('bing_submit_feed', { site_url: 'https://example.com/', feed_url: 'https://example.com/s.xml' })).isError, undefined);
   const removed = await write.run('bing_remove_feed', { site_url: 'https://example.com/', feed_url: 'https://example.com/s.xml' });
   assert.equal(removed.isError, true);
-  assert.match(removed.content[0]!.text, /GSC_ALLOW_DESTRUCTIVE=true/);
+  assert.match(removed.content[0]!.text, /TOOL_TIER=destructive/);
   assert.equal(write.calls.length, 1);
 
   // Read tools run at the read tier.
@@ -389,7 +389,7 @@ test('a 2xx response whose body cannot be read is an error, not an empty success
     assert.match(e.message, /could not be read/);
     return true;
   });
-  const { run } = bingServer({ GSC_SCOPES: 'full' }, () => brokenBody());
+  const { run } = bingServer({ TOOL_TIER: 'write' }, () => brokenBody());
   const res = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['https://example.com/a'] });
   assert.equal(res.isError, true);
   assert.doesNotMatch(res.content[0]!.text, /"submitted"/);
@@ -453,7 +453,7 @@ test('data_range describes the returned rows and source_window the whole Bing wi
 });
 
 test('bing_remove_feed validates feed_url before calling Bing', async () => {
-  const { run, calls } = bingServer({ GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' }, () => json({ d: null }));
+  const { run, calls } = bingServer({ TOOL_TIER: 'destructive' }, () => json({ d: null }));
   for (const feed_url of ['not a url', 'ftp://example.com/s.xml', 'https://u:p@example.com/s.xml']) {
     const res = await run('bing_remove_feed', { site_url: 'https://example.com/', feed_url });
     assert.equal(res.isError, true, feed_url);
@@ -465,7 +465,7 @@ test('bing_remove_feed validates feed_url before calling Bing', async () => {
 });
 
 test('bing_submit_urls rejects blank-only lists and URLs with credentials', async () => {
-  const { run, calls } = bingServer({ GSC_SCOPES: 'full' }, () => json({ d: null }));
+  const { run, calls } = bingServer({ TOOL_TIER: 'write' }, () => json({ d: null }));
   const blank = await run('bing_submit_urls', { site_url: 'https://example.com/', urls: ['  ', ' '] });
   assert.equal(blank.isError, true);
   assert.match(blank.content[0]!.text, /at least one non-empty URL/);

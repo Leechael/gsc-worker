@@ -2,6 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import { errorText, errorResult, formatDateTime, jsonError, jsonResult, textResult } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 /** API response shapes for POST /v1/urlInspection/index:inspect. */
 interface IndexStatusResult {
@@ -227,6 +229,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'inspect_url_enhanced',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'inspect_url_enhanced'),
       title: 'Inspect URL (enhanced)',
       description:
         'Enhanced URL inspection to check indexing status and rich results in Google. ' +
@@ -284,6 +287,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'batch_url_inspection',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'batch_url_inspection'),
       title: 'Batch URL inspection',
       description:
         'Inspect multiple URLs in batch (within API limits). URLs are inspected concurrently. ' +
@@ -324,6 +328,7 @@ export function registerInspectionTools(server: McpServer, svc: ServerServices):
   server.registerTool(
     'check_indexing_issues',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'check_indexing_issues'),
       title: 'Check indexing issues',
       description:
         'Check for specific indexing issues (not indexed, canonical mismatches, robots.txt blocks, fetch failures) across multiple URLs. ' +

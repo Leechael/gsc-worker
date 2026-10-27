@@ -1,6 +1,6 @@
 /**
  * IndexNow MCP tools (indexnow_*). Registered only when INDEXNOW_KEY is set.
- * indexnow_submit_urls needs the write tier (GSC_SCOPES=full);
+ * indexnow_submit_urls needs the write tier (TOOL_TIER=write);
  * indexnow_check_key_file is read-only and only fetches the key file on a host
  * the operator allowed (INDEXNOW_HOSTS, or the host of an absolute
  * INDEXNOW_KEY_LOCATION).
@@ -19,26 +19,28 @@ import {
   resolveKeyLocation,
   type IndexNowConfig,
 } from './client.js';
+import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 const mask = (text: string, key: string) => redactSecret(text, key).split('***').join('<INDEXNOW_KEY>');
 
 export const INDEXNOW_LABEL = 'IndexNow';
 
 export const INDEXNOW_TOOLS: readonly EngineToolInfo[] = [
-  { name: 'indexnow_check_key_file', tier: 'read', summary: 'Check that the IndexNow key file is hosted on a site' },
-  { name: 'indexnow_submit_urls', tier: 'write', summary: `Notify IndexNow engines (Bing, Yandex, Seznam, Naver, ...) of up to ${INDEXNOW_MAX_URLS} changed URLs on one host` },
+  { name: 'indexnow_check_key_file', tier: 'read', openWorld: true, summary: 'Check that the IndexNow key file is hosted on a site' },
+  { name: 'indexnow_submit_urls', tier: 'write', idempotent: false, openWorld: true, summary: `Notify IndexNow engines (Bing, Yandex, Seznam, Naver, ...) of up to ${INDEXNOW_MAX_URLS} changed URLs on one host` },
 ];
 
 export function registerIndexNowTools(server: McpServer, svc: ServerServices, cfg: IndexNowConfig, client: IndexNowClient): void {
   server.registerTool(
     'indexnow_submit_urls',
     {
+      annotations: toolAnnotations(INDEXNOW_TOOLS, 'indexnow_submit_urls'),
       title: 'IndexNow: submit URLs',
       description:
         `Notify search engines that URLs were added, updated or deleted, via IndexNow (${INDEXNOW_ENDPOINT}). ` +
         'Participating engines share submissions with each other (Bing, Yandex, Seznam, Naver, Yep and others; not Google). ' +
         `Up to ${INDEXNOW_MAX_URLS} URLs per call, all on the same host; the host is taken from the URLs. ` +
-        'The key file must be hosted on that host. A 200/202 answer means received, not indexed. Requires GSC_SCOPES=full.',
+        'The key file must be hosted on that host. A 200/202 answer means received, not indexed. Requires TOOL_TIER=write.',
       inputSchema: z.object({
         urls: z.array(z.string().min(1)).min(1).max(INDEXNOW_MAX_URLS).describe('Absolute http(s) URLs on one host.'),
       }),
@@ -63,6 +65,7 @@ export function registerIndexNowTools(server: McpServer, svc: ServerServices, cf
   server.registerTool(
     'indexnow_check_key_file',
     {
+      annotations: toolAnnotations(INDEXNOW_TOOLS, 'indexnow_check_key_file'),
       title: 'IndexNow: check key file',
       description:
         'Check that the IndexNow key file for a site is publicly reachable over https and contains INDEXNOW_KEY. ' +

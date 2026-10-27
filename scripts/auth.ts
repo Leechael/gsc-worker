@@ -3,9 +3,12 @@
  * exchanges the code and writes a credentials file — no hand-copying needed.
  *
  * Usage:
- *   npm run auth -- --scopes readonly|full \
+ *   npm run auth -- --scopes readonly|full [--ga4] \
  *     --client-secrets ~/Downloads/client_secret_xxx.json \
  *     --out gsc-credentials.json
+ *
+ * --ga4: also request https://www.googleapis.com/auth/analytics.readonly so the
+ *   token can call Google Analytics Admin and Data APIs (the ga4_* tools).
  *
  * --client-secrets: the JSON you downloaded from Google Cloud Console
  *   (APIs & Services → Credentials → OAuth client). If omitted, reads
@@ -21,6 +24,7 @@ const SCOPES = {
   readonly: 'https://www.googleapis.com/auth/webmasters.readonly',
   full: 'https://www.googleapis.com/auth/webmasters',
 } as const;
+const ANALYTICS_READONLY = 'https://www.googleapis.com/auth/analytics.readonly';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,6 +37,8 @@ if (!scope) {
   console.error(`Unknown --scopes '${scopesArg}'. Use readonly or full.`);
   process.exit(1);
 }
+const wantGa4 = process.argv.includes('--ga4');
+const requestedScopes = wantGa4 ? `${scope} ${ANALYTICS_READONLY}` : scope;
 
 let clientId = process.env.GOOGLE_CLIENT_ID;
 let clientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -60,7 +66,7 @@ const oauthUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
 oauthUrl.searchParams.set('client_id', clientId);
 oauthUrl.searchParams.set('redirect_uri', `http://${REDIRECT_HOST}:PORT/callback`);
 oauthUrl.searchParams.set('response_type', 'code');
-oauthUrl.searchParams.set('scope', scope);
+oauthUrl.searchParams.set('scope', requestedScopes);
 oauthUrl.searchParams.set('access_type', 'offline');
 oauthUrl.searchParams.set('prompt', 'consent');
 
@@ -85,7 +91,7 @@ await new Promise<void>((resolve) => server.listen(0, REDIRECT_HOST, resolve));
 const port = (server.address() as { port: number }).port;
 const finalUrl = oauthUrl.toString().replace('PORT', String(port));
 
-console.log(`Opening browser for Google authorization (scope: ${scopesArg})…`);
+console.log(`Opening browser for Google authorization (scope: ${scopesArg}${wantGa4 ? ' + analytics.readonly' : ''})…`);
 console.log(`If it doesn't open, visit:\n  ${finalUrl}`);
 execFile('open', [finalUrl], () => {});
 

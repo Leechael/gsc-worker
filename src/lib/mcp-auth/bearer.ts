@@ -49,25 +49,15 @@ function makeVerifier(expectedToken: string): OAuthTokenVerifier {
 /**
  * Static-token authenticator (plan §6.5.4).
  *
- * Reads `Authorization: Bearer <token>` by default, or the raw token from
- * `MCP_BEARER_HEADER` (e.g. `x-api-key`) when configured — needed when the
- * single-header Cloudflare Access service-token mode occupies Authorization.
+ * Reads `Authorization: Bearer <token>`.
  */
 export function buildBearerAuthenticator(cfg: AuthConfig): (req: Request) => Promise<AuthOutcome> {
   const verifier = makeVerifier(cfg.bearerToken!);
-  const header = cfg.bearerHeader;
 
   return async (req: Request): Promise<AuthOutcome> => {
     try {
-      if (header === 'authorization') {
-        const authInfo = await verifyBearerToken(req.headers.get('authorization'), { verifier });
-        return { kind: 'ok', authInfo, identities: [STATIC_IDENTITY] };
-      }
-      const raw = req.headers.get(header);
-      if (!raw) {
-        throw new OAuthError(OAuthErrorCode.InvalidToken, `missing ${header} header`);
-      }
-      return { kind: 'ok', authInfo: await verifier.verifyAccessToken(raw), identities: [STATIC_IDENTITY] };
+      const authInfo = await verifyBearerToken(req.headers.get('authorization'), { verifier });
+      return { kind: 'ok', authInfo, identities: [STATIC_IDENTITY] };
     } catch (e) {
       // The SDK's challenge Response may come from a foreign realm; rebuild it
       // with global classes so downstream (Hono, Workers) handles it uniformly.

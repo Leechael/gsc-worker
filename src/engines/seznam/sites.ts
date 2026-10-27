@@ -1,8 +1,9 @@
 /**
- * Seznam API keys are per site, so the configuration maps sites to keys:
+ * Seznam API keys are per site. SEZNAM_API_KEY is either one key or a JSON
+ * object mapping sites to keys:
  *
- *   SEZNAM_API_KEYS = {"example.cz": "<key>", "https://shop.example.cz": "<key>"}
- *   SEZNAM_API_KEY  = "<key>"     (one site; used when no SEZNAM_API_KEYS entry matches)
+ *   SEZNAM_API_KEY = "<key>"
+ *   SEZNAM_API_KEY = {"example.cz": "<key>", "https://shop.example.cz": "<key>"}
  *
  * Site labels are host names, optionally with a protocol (Seznam treats
  * http and https as different sites). Matching is case-insensitive and does
@@ -10,9 +11,8 @@
  */
 import type { Config } from '../../lib/config.js';
 
-export const SEZNAM_KEYS_ENV = 'SEZNAM_API_KEYS';
 export const SEZNAM_KEY_ENV = 'SEZNAM_API_KEY';
-/** Label of the SEZNAM_API_KEY entry. */
+/** Label of a single (non-JSON) SEZNAM_API_KEY. */
 export const DEFAULT_SITE = 'default';
 
 export interface SeznamSite {
@@ -51,8 +51,10 @@ function parseLabel(label: string): { host: string; protocol: string | null } | 
 export function parseSeznamSites(config: Config): SeznamSites {
   const sites: SeznamSite[] = [];
   let error: string | null = null;
-  const raw = config.engineEnv[SEZNAM_KEYS_ENV];
-  if (raw) {
+  const raw = config.engineEnv[SEZNAM_KEY_ENV]?.trim();
+  if (raw && !raw.startsWith('{')) {
+    sites.push({ label: DEFAULT_SITE, key: raw, host: null, protocol: null });
+  } else if (raw) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -60,7 +62,7 @@ export function parseSeznamSites(config: Config): SeznamSites {
       parsed = undefined;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      error = `${SEZNAM_KEYS_ENV} must be a JSON object mapping site to API key, e.g. {"example.cz":"<key>"}; it was ignored.`;
+      error = `${SEZNAM_KEY_ENV} must be one key or a JSON object mapping site to API key, e.g. {"example.cz":"<key>"}; it was ignored.`;
     } else {
       const bad: string[] = [];
       for (const [label, key] of Object.entries(parsed as Record<string, unknown>)) {
@@ -77,13 +79,9 @@ export function parseSeznamSites(config: Config): SeznamSites {
         sites.push({ label: norm, key: key.trim(), host: target.host, protocol: target.protocol });
       }
       if (bad.length > 0) {
-        error = `${SEZNAM_KEYS_ENV}: ignored entries with an invalid site name, a duplicate site, or an empty key: ${bad.join(', ')}.`;
+        error = `${SEZNAM_KEY_ENV}: ignored entries with an invalid site name, a duplicate site, or an empty key: ${bad.join(', ')}.`;
       }
     }
-  }
-  const single = config.engineEnv[SEZNAM_KEY_ENV];
-  if (single) {
-    sites.push({ label: DEFAULT_SITE, key: single, host: null, protocol: null });
   }
   return { sites, error };
 }
@@ -91,7 +89,7 @@ export function parseSeznamSites(config: Config): SeznamSites {
 /**
  * Pick the key for a call. `site` names a configured label (or a URL/host on
  * it); otherwise `url` is matched by host. With a single configured site, or
- * no match and SEZNAM_API_KEY set, that key is used.
+ * no match and a single (non-JSON) SEZNAM_API_KEY, that key is used.
  */
 export function selectSite(all: SeznamSite[], site: string | null | undefined, url?: string | null): SeznamSite {
   const named = all.filter((s) => s.host !== null);

@@ -1,5 +1,5 @@
 /**
- * Registration and diagnostics for the optional search engines listed in
+ * Registration and diagnostics for the optional engines listed in
  * ./registry.ts. server.ts and get_capabilities only call into this file.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -8,7 +8,7 @@ import type { ServerServices } from '../mcp/context.js';
 import { ENGINES } from './registry.js';
 import { tierAllows } from './types.js';
 
-/** Register tools for every engine whose secret is configured. */
+/** Register tools for every engine that is enabled. */
 export function registerEngineTools(server: McpServer, svc: ServerServices): void {
   for (const engine of ENGINES) {
     if (engine.enabled(svc.config)) engine.register(server, svc);
@@ -17,20 +17,20 @@ export function registerEngineTools(server: McpServer, svc: ServerServices): voi
 
 const TIER_HINT = {
   read: '',
-  write: 'needs GSC_SCOPES=full',
-  destructive: 'needs GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true',
+  write: 'needs TOOL_TIER=write',
+  destructive: 'needs TOOL_TIER=destructive',
 } as const;
 
 /** get_capabilities section: which engines are enabled. Never prints secret values. */
 export function engineCapabilityLines(config: Config): string[] {
   if (ENGINES.length === 0) return [];
-  const lines: string[] = ['', 'OTHER SEARCH ENGINES (opt-in; tools appear only when configured):'];
+  const lines: string[] = ['', 'OPTIONAL ENGINES:'];
   for (const engine of ENGINES) {
     if (!engine.enabled(config)) {
       lines.push(`- ${engine.label}: not configured (set the ${engine.enableVar} secret to enable ${engine.id}_* tools)`);
       continue;
     }
-    lines.push(`- ${engine.label}: enabled (${engine.enableVar} is set)`);
+    lines.push(`- ${engine.label}: enabled${engine.enableVar ? ` (${engine.enableVar} is set)` : ''}`);
     for (const extra of engine.statusLines(config)) lines.push(`    ${extra}`);
     for (const tool of engine.tools) {
       const gated = tool.tier !== 'read' && !tierAllows(config.scopeTier, tool.tier);

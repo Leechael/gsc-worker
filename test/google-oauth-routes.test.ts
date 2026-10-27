@@ -23,7 +23,6 @@ afterEach(() => {
 function setup(env: Record<string, unknown> = {}, entry: 'worker' | 'node' = 'worker') {
   const kv = new MemoryKv();
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
@@ -96,7 +95,6 @@ test('every /auth route rejects unauthenticated requests on Workers', async () =
 
 test('cf-access mode: /auth requires the Access JWT header', async () => {
   const { call } = setup({
-    MCP_AUTH_MODE: 'cf-access',
     CF_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
     CF_ACCESS_AUD: 'aud',
   });
@@ -138,7 +136,7 @@ test('start redirects to Google with offline access, consent, scope, state and S
   assert.equal(p.get('client_id'), 'client-id.apps.googleusercontent.com');
   assert.equal(p.get('redirect_uri'), `https://${HOST}/auth/google/callback`);
   assert.equal(p.get('access_type'), 'offline');
-  assert.equal(p.get('prompt'), 'consent');
+  assert.equal(p.get('prompt'), 'consent select_account');
   assert.equal(p.get('response_type'), 'code');
   assert.equal(p.get('code_challenge_method'), 'S256');
   assert.deepEqual(p.get('scope')!.split(' '), [GOOGLE_SCOPE_READONLY, 'openid', 'email']);
@@ -150,8 +148,8 @@ test('start redirects to Google with offline access, consent, scope, state and S
   }
 });
 
-test('start requests the full webmasters scope only when GSC_SCOPES=full', async () => {
-  const { call } = setup({ GSC_SCOPES: 'full' });
+test('start requests the full webmasters scope only when TOOL_TIER is write or above', async () => {
+  const { call } = setup({ TOOL_TIER: 'write' });
   const { location } = await startFlow(call);
   assert.ok(location.searchParams.get('scope')!.split(' ').includes(GOOGLE_SCOPE_FULL));
   assert.ok(!location.searchParams.get('scope')!.split(' ').includes(GOOGLE_SCOPE_READONLY));
@@ -213,7 +211,8 @@ test('callback exchanges the code with the PKCE verifier and stores the token en
   assert.equal(exchange.body.get('redirect_uri'), `https://${HOST}/auth/google/callback`);
   assert.match(exchange.body.get('code_verifier') ?? '', /^[\w-]{43}$/);
 
-  const raw = kv.data.get(KV_KEYS.refreshToken)!;
+  // Stored under the account's own key, since Google returned its email.
+  const raw = kv.data.get(KV_KEYS.account('ada@example.com'))!;
   assert.ok(raw && !raw.includes('new-refresh'));
   assert.equal(kv.data.has(KV_KEYS.oauthState(state)), false, 'state consumed');
 
@@ -271,7 +270,11 @@ test('callback accepts a token response that omits scope (RFC 6749: same as requ
   mockGoogle({ token: () => Response.json({ refresh_token: 'r', access_token: 'at' }) });
   const res = await call(`/auth/google/callback?code=c&state=${state}`);
   assert.equal(res.status, 200, await res.clone().text());
-  assert.equal((await store.loadMeta())?.scope, GOOGLE_SCOPE_READONLY);
+  const meta = await store.loadMeta();
+  assert.equal(meta?.scope, GOOGLE_SCOPE_READONLY);
+  assert.equal(meta?.grantedScope, null);
+  const status = await (await call('/auth/google/status')).json() as { stored: { granted_scope: string } };
+  assert.equal(status.stored.granted_scope, 'unknown');
 });
 
 test('callback answers 503 with a retry hint when KV cannot store the token', async () => {

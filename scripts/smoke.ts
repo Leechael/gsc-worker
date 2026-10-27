@@ -9,7 +9,7 @@
  *   CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... MCP_URL=https://gsc-mcp.example.com/mcp \
  *     npx tsx scripts/smoke.ts --site ...
  *
- * Expects the readonly scope tier: write/destructive tools must refuse with
+ * Expects TOOL_TIER=read: write/destructive tools must refuse with
  * tier guidance flagged isError:true.
  *
  * Strict assertions (review P2-8, residual round): a success must carry a

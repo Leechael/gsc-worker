@@ -123,9 +123,9 @@ test('get_capabilities reports whether Yandex is enabled without revealing the t
   assert.match(on, /- Yandex Webmaster: enabled \(YANDEX_OAUTH_TOKEN is set\)/);
   assert.match(on, /about 6 months/);
   assert.match(on, /- yandex_list_hosts \[read\]: /);
-  assert.match(on, /- yandex_recrawl_url \[write\]: .*\(not enabled at the current tier: needs GSC_SCOPES=full\)/);
+  assert.match(on, /- yandex_recrawl_url \[write\]: .*\(not enabled at the current tier: needs TOOL_TIER=write\)/);
   assert.doesNotMatch(on, new RegExp(TOKEN));
-  const full = await capabilitiesText({ YANDEX_OAUTH_TOKEN: TOKEN, GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' });
+  const full = await capabilitiesText({ YANDEX_OAUTH_TOKEN: TOKEN, TOOL_TIER: 'destructive' });
   assert.match(full, /- yandex_delete_sitemap \[destructive\]: /);
   assert.doesNotMatch(full, /yandex_delete_sitemap \[destructive\]: .*not enabled/);
 });
@@ -235,7 +235,7 @@ test('external link history always sends the required indicator', async () => {
 });
 
 test('429 reports the daily quota and reset time and is not retried', async () => {
-  const { call, calls } = harness({ GSC_SCOPES: 'full' }, (c) =>
+  const { call, calls } = harness({ TOOL_TIER: 'write' }, (c) =>
     c.url.pathname.endsWith('/recrawl/queue')
       ? { status: 429, body: { error_code: 'QUOTA_EXCEEDED', daily_quota: 20, exceeded_until: '2026-10-21T00:00:00,000+0300', error_message: 'quota' } }
       : undefined);
@@ -307,13 +307,13 @@ test('write tools are gated at the read tier and call nothing', async () => {
   ] as const) {
     const r = await call(name, args);
     assert.equal(r.isError, true, name);
-    assert.match(r.content[0]!.text, new RegExp(`Safety: ${name} (changes data in|removes data from) Yandex Webmaster and is disabled at the current scope tier \\(read\\)`));
+    assert.match(r.content[0]!.text, new RegExp(`Safety: ${name} (changes data in|removes data from) Yandex Webmaster and is disabled at the current tool tier \\(read\\)`));
   }
   assert.equal(calls.length, 0);
 });
 
 test('write tier allows recrawl and add-sitemap with the documented JSON bodies, but not delete', async () => {
-  const { call, calls } = harness({ GSC_SCOPES: 'full' }, (c) => {
+  const { call, calls } = harness({ TOOL_TIER: 'write' }, (c) => {
     if (c.url.pathname.endsWith('/recrawl/queue')) return { status: 202, body: { task_id: 'c7fe80c0-36e3-11e6-8b2d-df96aa592c0a', quota_remainder: 19 } };
     if (c.url.pathname.endsWith('/user-added-sitemaps')) return { status: 201, body: { sitemap_id: 'c7-fe:80-c0' } };
     return undefined;
@@ -330,12 +330,12 @@ test('write tier allows recrawl and add-sitemap with the documented JSON bodies,
 
   const del = await call('yandex_delete_sitemap', { host: HOST_ID, sitemap_id: 'c7-fe:80-c0' });
   assert.equal(del.isError, true);
-  assert.match(del.content[0]!.text, /GSC_ALLOW_DESTRUCTIVE=true/);
+  assert.match(del.content[0]!.text, /TOOL_TIER=destructive/);
   assert.equal(calls.some((c) => c.method === 'DELETE'), false);
 });
 
 test('destructive tier deletes a user-added sitemap (204)', async () => {
-  const { call, calls } = harness({ GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' }, () => ({ status: 204 }));
+  const { call, calls } = harness({ TOOL_TIER: 'destructive' }, () => ({ status: 204 }));
   const r = await call('yandex_delete_sitemap', { host: HOST_ID, sitemap_id: 'c7-fe:80-c0' });
   assert.deepEqual(json(r), { deleted: true, sitemap_id: 'c7-fe:80-c0' });
   const del = calls.at(-1)!;

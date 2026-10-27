@@ -13,7 +13,7 @@ import {
 import { GoogleTokenStore, KV_KEYS, OAUTH_STATE_TTL_SEC, StoredTokenUnreadableError } from '../src/lib/google-oauth/store.js';
 import { emailFromIdToken, scopesCover } from '../src/lib/google-oauth/google.js';
 import { TokenProvider, TokenRefreshError } from '../src/lib/auth.js';
-import { GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
+import { GOOGLE_SCOPE_ANALYTICS, GOOGLE_SCOPE_ANALYTICS_READONLY, GOOGLE_SCOPE_FULL, GOOGLE_SCOPE_READONLY, parseConfig, setEnvSource, validateHttpConfig, validateHttpWarnings } from '../src/lib/config.js';
 import { MemoryKv } from './helpers/memory-kv.js';
 
 const KEY = randomBytes(32).toString('base64');
@@ -103,11 +103,12 @@ test('stored refresh token is encrypted in KV and round-trips with metadata', as
   const kv = new MemoryKv();
   const store = new GoogleTokenStore(kv, KEY);
   await store.save('1//stored-refresh', { scope: GOOGLE_SCOPE_READONLY, clientId: 'cid', email: 'ada@example.com' });
-  const raw = kv.data.get(KV_KEYS.refreshToken)!;
+  const raw = kv.data.get(KV_KEYS.account('ada@example.com'))!;
   assert.ok(!raw.includes('stored-refresh'));
   const loaded = await store.loadRefreshToken();
   assert.equal(loaded?.refreshToken, '1//stored-refresh');
   assert.equal(loaded?.meta.email, 'ada@example.com');
+  assert.equal(loaded?.meta.grantedScope, null, 'legacy save without grantedScope is unknown');
   assert.equal((await store.loadMeta())?.clientId, 'cid');
   await store.clear();
   assert.equal(await store.loadRefreshToken(), null);
@@ -230,6 +231,18 @@ test('scopesCover: full covers readonly, readonly does not cover full', () => {
   assert.equal(scopesCover(`openid ${GOOGLE_SCOPE_FULL}`, [GOOGLE_SCOPE_READONLY]), true);
   assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_FULL]), false);
   assert.equal(scopesCover('openid email', [GOOGLE_SCOPE_READONLY]), false);
+  assert.equal(scopesCover(GOOGLE_SCOPE_ANALYTICS, [GOOGLE_SCOPE_ANALYTICS_READONLY]), true);
+  assert.equal(scopesCover(GOOGLE_SCOPE_READONLY, [GOOGLE_SCOPE_ANALYTICS_READONLY]), false);
+});
+
+test('updateGrantedScope writes the Google-returned scope without rotating the token', async () => {
+  const store = new GoogleTokenStore(new MemoryKv(), KEY);
+  await store.save('rt', { scope: GOOGLE_SCOPE_READONLY, clientId: 'cid', email: 'ada@example.com' });
+  await store.updateGrantedScope('ada@example.com', GOOGLE_SCOPE_FULL);
+  const loaded = await store.loadRefreshToken('ada@example.com');
+  assert.equal(loaded?.refreshToken, 'rt');
+  assert.equal(loaded?.meta.grantedScope, GOOGLE_SCOPE_FULL);
+  assert.equal(loaded?.meta.scope, GOOGLE_SCOPE_READONLY);
 });
 
 test('emailFromIdToken reads the email claim and tolerates junk', () => {
@@ -241,7 +254,7 @@ test('emailFromIdToken reads the email claim and tolerates junk', () => {
 // ---------- config validation ----------
 
 function workerConfig(env: Record<string, unknown>) {
-  setEnvSource({ MCP_AUTH_MODE: 'bearer', MCP_AUTH_TOKEN: 'x'.repeat(40), MCP_ALLOWED_HOSTS: 'gsc.example.com', ...env });
+  setEnvSource({ MCP_AUTH_TOKEN: 'x'.repeat(40), MCP_ALLOWED_HOSTS: 'gsc.example.com', ...env });
   const cfg = parseConfig();
   setEnvSource(process.env as Record<string, unknown>);
   return cfg;

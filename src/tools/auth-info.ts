@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { Config } from '../lib/config.js';
 import type { ServerServices } from '../mcp/context.js';
 import { textResult } from './helpers.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 /**
  * get_creator_info + reauthenticate (plan §6.3: reauthenticate 返回操作指引，
@@ -12,6 +14,7 @@ export function registerAuthInfoTools(server: McpServer, svc: ServerServices): v
   server.registerTool(
     'get_creator_info',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_creator_info'),
       title: 'Creator info',
       description: 'Information about the creator of the original mcp-gsc project.',
     },
@@ -33,6 +36,7 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
   server.registerTool(
     'reauthenticate',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'reauthenticate'),
       title: 'Re-authentication guidance',
       description:
         'How to re-authenticate with a different Google account or scope tier. ' +
@@ -51,18 +55,20 @@ technical SEO, Python-driven tools, and data analysis for SEO performance.
   open https://<worker-host>/auth/google (check status at /auth/google/status).
 Only the deployment's operator can do this: it takes ${whoMay}. Anyone else gets 403,
 so if that is not you, ask the operator.
-The newly stored token replaces the previous one and takes precedence over GOOGLE_REFRESH_TOKEN.
+The new token replaces the stored token of the same Google account; signing in as another account adds it
+(tools then pick the account per property). Stored accounts take precedence over GOOGLE_REFRESH_TOKEN as the default.
+To also grant Google Analytics (for ga4_* tools), open https://<worker-host>/auth/google?ga4=1 instead.
 
 Otherwise this server uses credentials from its environment (no browser access here).
 To switch Google account or re-authorize at the current tier (${tier}), run locally:
 
   npm run auth -- --scopes ${neededScope} \\
     --client-secrets path/to/client_secrets.json --out gsc-credentials.json
+  (add --ga4 to also grant Google Analytics for ga4_* tools)
 
-Scope tiers: readonly → read tools only; full → + submit_sitemap (GSC_SCOPES=full); ` +
-        `+ add_site/delete_site/delete_sitemap (also GSC_ALLOW_DESTRUCTIVE=true).
-To CHANGE tier, update GSC_SCOPES (and GSC_ALLOW_DESTRUCTIVE) in the server
-environment along with the new credentials.
+Tool tiers (TOOL_TIER): read → read tools only (readonly scope); write → + submit_sitemap; ` +
+        `destructive → + add_site/delete_site/delete_sitemap. write and destructive need --scopes full.
+To CHANGE tier, update TOOL_TIER in the server environment along with the new credentials.
 
 Then either point the server at the file (local/Docker):
   export GSC_CREDENTIALS_FILE=$PWD/gsc-credentials.json
@@ -80,7 +86,7 @@ Warnings (plan §6.2):
   );
 }
 
-/** What a request to /auth/google must carry under the configured MCP_AUTH_MODE (all modes must pass). */
+/** What a request to /auth/google must carry under the configured checks (all must pass). */
 function authorizeRequirement(cfg: Config): string {
   const admins = cfg.googleAuth.admins.length > 0;
   const checks: string[] = [];
@@ -91,6 +97,6 @@ function authorizeRequirement(cfg: Config): string {
       checks.push('the MCP_AUTH_TOKEN');
     }
   }
-  const required = checks.length > 0 ? checks.join(' and ') : 'the configured MCP_AUTH_MODE checks';
+  const required = checks.length > 0 ? checks.join(' and ') : 'the configured authentication checks';
   return admins ? `${required}, with one of those identities listed in GOOGLE_AUTH_ADMINS` : required;
 }

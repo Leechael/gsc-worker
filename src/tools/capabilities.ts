@@ -1,8 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ServerServices } from '../mcp/context.js';
-import { scopesCover } from '../lib/google-oauth/google.js';
+import { hasAnalyticsReadScope, scopesCover } from '../lib/google-oauth/google.js';
 import { textResult } from './helpers.js';
 import { engineCapabilityLines } from '../engines/index.js';
+import type { AccountStatus } from '../lib/auth.js';
+import { GOOGLE_SCOPE_FULL } from '../lib/config.js';
+import { toolAnnotations } from '../mcp/tool-annotations.js';
+import { GSC_TOOLS } from './tool-tiers.js';
 
 const AEO_GEO_BOUNDARY = `
 AEO/GEO CAPABILITY BOUNDARY:
@@ -26,10 +30,33 @@ const TIER_TOOLS: Record<string, string[]> = {
   destructive: ['add_site', 'delete_site', 'delete_sitemap', 'manage_sitemaps (action=delete)'],
 };
 
+/** One line per connected Google account; never prints tokens. */
+function googleAccountLines(accounts: AccountStatus[]): string[] {
+  if (accounts.length === 0) return [];
+  const lines = [`GOOGLE ACCOUNTS (${accounts.length}; tools pick the account with the highest permission on each property):`];
+  for (const a of accounts) {
+    const name = a.source === 'env' ? 'GOOGLE_REFRESH_TOKEN (env)' : a.email ?? `${a.id} (stored before account emails were recorded)`;
+    const granted = a.stored?.grantedScope;
+    let scope =
+      granted == null
+        ? 'granted scope unknown'
+        : granted.split(/\s+/).includes(GOOGLE_SCOPE_FULL)
+          ? 'granted scope full'
+          : 'granted scope readonly';
+    if (granted != null) {
+      scope += hasAnalyticsReadScope(granted) ? ', analytics' : ', no analytics';
+    }
+    const details = [a.source, scope, a.stored ? `added ${a.stored.storedAt}` : null].filter(Boolean).join(', ');
+    lines.push(`  - ${name} [${details}]: ${a.available ? 'available' : `unavailable: ${a.error ?? 'client not configured'}`}`);
+  }
+  return lines;
+}
+
 export function registerCapabilitiesTools(server: McpServer, svc: ServerServices): void {
   server.registerTool(
     'get_capabilities',
     {
+      annotations: toolAnnotations(GSC_TOOLS, 'get_capabilities'),
       title: 'Capabilities & auth status',
       description:
         'Get a full list of available tools, current auth status, scope tier, and how to get started. ' +
@@ -56,10 +83,14 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       } else {
         authStatus = '✅ Credentials configured — ready to use all tools in the current scope tier.';
       }
-      if (status.source === 'kv' && status.stored && !scopesCover(status.stored.scope, svc.config.google.scopes)) {
-        authStatus +=
-          `\n⚠️ The stored grant (scope: ${status.stored.scope}) does not cover the configured GSC_SCOPES; ` +
-          'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+      if (status.source === 'kv' && status.stored) {
+        const granted = status.stored.grantedScope;
+        const gscScopes = svc.config.google.scopes.filter((s) => s.includes('/auth/webmasters'));
+        if (granted !== null && !scopesCover(granted, gscScopes)) {
+          authStatus +=
+            `\n⚠️ The granted scope (${granted}) does not cover the scope TOOL_TIER=${svc.config.scopeTier} needs; ` +
+            'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
+        }
       }
       const tokenSource = {
         kv: `kv (authorized in-Worker via /auth/google${status.stored ? `, stored ${status.stored.storedAt}` : ''}${status.stored?.email ? `, account ${status.stored.email}` : ''})`,
@@ -71,11 +102,12 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       const lines: string[] = [
         'Google Search Console MCP Server (TypeScript)',
         '',
-        `SCOPE TIER: ${tier} (GSC_SCOPES=${svc.config.google.scopes.includes('https://www.googleapis.com/auth/webmasters') ? 'full' : 'readonly'}${svc.config.allowDestructive ? ', GSC_ALLOW_DESTRUCTIVE=true' : ''})`,
+        `TOOL TIER: ${tier} (TOOL_TIER)`,
         '',
         'AUTH STATUS:',
         authStatus,
         `TOKEN SOURCE: ${tokenSource}`,
+        ...googleAccountLines(status.accounts),
         '',
         'GETTING STARTED:',
         '1. Fix auth if needed (see AUTH STATUS).',
@@ -105,15 +137,11 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         lines.push('', 'Write (scope tier write):', ...TIER_TOOLS.write!.map((t) => `  - ${t}`));
       }
       if (tier === 'destructive') {
-        lines.push('', 'Destructive (GSC_ALLOW_DESTRUCTIVE=true):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
+        lines.push('', 'Destructive (TOOL_TIER=destructive):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
       } else {
         const notEnabled: string[] = [];
-        if (tier === 'read') notEnabled.push('  - write tools: set GSC_SCOPES=full');
-        notEnabled.push(
-          tier === 'read'
-            ? '  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true'
-            : '  - destructive tools (add_site/delete_site/delete_sitemap): set GSC_ALLOW_DESTRUCTIVE=true',
-        );
+        if (tier === 'read') notEnabled.push('  - write tools: set TOOL_TIER=write');
+        notEnabled.push('  - destructive tools (add_site/delete_site/delete_sitemap): set TOOL_TIER=destructive');
         lines.push('', 'Not enabled at the current tier:', ...notEnabled);
       }
       lines.push(...engineCapabilityLines(svc.config), '', AEO_GEO_BOUNDARY, '');

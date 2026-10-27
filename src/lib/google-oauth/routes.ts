@@ -1,16 +1,25 @@
 import type { Context, Hono } from 'hono';
 import type { Config } from '../config.js';
-import { GOOGLE_CALLBACK_PATH, INVALID_CONFIG_MESSAGE, isLoopbackHost, TOKEN_KV_BINDING } from '../config.js';
+import {
+  GOOGLE_CALLBACK_PATH,
+  GOOGLE_SCOPE_ANALYTICS_READONLY,
+  INVALID_CONFIG_MESSAGE,
+  isLoopbackHost,
+  TOKEN_KV_BINDING,
+} from '../config.js';
 import type { AuthBuildResult, AuthIdentity } from '../mcp-auth/index.js';
 import type { ServerServices } from '../../mcp/context.js';
 import { pkceChallenge, randomToken } from './crypto.js';
 import {
   buildAuthorizationUrl,
   exchangeAuthorizationCode,
+  fetchUserEmail,
   GoogleOAuthError,
   revokeGoogleToken,
   scopesCover,
 } from './google.js';
+import { accountIdFor } from './store.js';
+import type { AccountStatus } from '../auth.js';
 
 export const AUTH_BASE_PATH = '/auth/google';
 
@@ -53,14 +62,22 @@ export function resolveRedirectUri(cfg: Config, requestUrl: string, hostHeader: 
 }
 
 /**
- * In-Worker Google authorization (single Google account per deployment):
+ * In-Worker Google authorization. Several Google accounts can be connected;
+ * each authorization stores (or replaces) the token of the account that
+ * signed in, keyed by its email:
  *
- *   GET  /auth/google           → 302 to Google consent (state + PKCE S256)
- *   GET  /auth/google/callback  → exchange code, store encrypted refresh token
- *   GET  /auth/google/status    → source / scope / account / stored-at (no secrets)
- *   POST /auth/google/revoke    → revoke at Google, delete stored token
+ *   GET  /auth/google                  → 302 to Google consent (state + PKCE S256);
+ *                                        ?ga4=1 also requests analytics.readonly
+ *   GET  /auth/google/callback         → exchange code, store encrypted refresh token
+ *   GET  /auth/google/status           → sources / scopes / accounts / stored-at (no secrets)
+ *   GET  /auth/google/accounts         → connected accounts and their health (admins)
+ *   POST /auth/google/revoke           → remove one account: revoke at Google, delete its token
+ *   POST /auth/google/accounts/remove  → same as /revoke
  *
- * Every route sits behind the same MCP_AUTH_MODE check as /mcp (plus the
+ * Removal takes `account` (email) as a query or form parameter; it may be
+ * omitted when exactly one account is stored.
+ *
+ * Every route sits behind the same authentication checks as /mcp (plus the
  * global Host/Origin validation). The pending state is bound to the identity
  * that started the flow, so a callback must come from that same identity.
  * On the Node entry the routes answer 404: Node keeps `npm run auth` +
@@ -105,18 +122,22 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     const redirect = resolveRedirectUri(cfg, c.req.url, c.req.header('host'));
     if (!redirect.ok) return respond(c, 400, 'Authorization unavailable', { error: 'invalid_redirect_uri', error_description: redirect.error });
 
+    const scopes = wantsAnalytics(c.req.query('ga4'))
+      ? [...cfg.google.scopes, GOOGLE_SCOPE_ANALYTICS_READONLY]
+      : cfg.google.scopes;
     const state = randomToken();
     const codeVerifier = randomToken();
     await svc.tokenStore!.putState(state, {
       codeVerifier,
       principal: c.get('authPrincipal'),
       redirectUri: redirect.uri,
+      scopes,
       createdAt: new Date().toISOString(),
     });
     const location = buildAuthorizationUrl({
       clientId: cfg.google.clientId!,
       redirectUri: redirect.uri,
-      scopes: cfg.google.scopes,
+      scopes,
       state,
       codeChallenge: await pkceChallenge(codeVerifier),
     });
@@ -166,6 +187,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
     const record = taken.record;
+    const requiredScopes = record.scopes ?? cfg.google.scopes;
     if (redirect.uri !== record.redirectUri) {
       return respond(c, 400, 'Authorization failed', {
         error: 'invalid_redirect_uri',
@@ -181,23 +203,29 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         code,
         redirectUri: record.redirectUri,
         codeVerifier: record.codeVerifier,
-        requestedScopes: cfg.google.scopes,
+        requestedScopes: requiredScopes,
       });
     } catch (e) {
       const message = e instanceof GoogleOAuthError ? e.message : 'Google token exchange failed.';
       return respond(c, 502, 'Authorization failed', { error: 'token_exchange_failed', error_description: message });
     }
+    let email = result.email;
+    if (!email && result.accessToken) email = await fetchUserEmail(fetchImpl, result.accessToken);
     if (!result.refreshToken) {
       return respond(c, 502, 'Authorization failed', {
         error: 'no_refresh_token',
         error_description: `Google did not return a refresh token. Open ${AUTH_BASE_PATH} again and approve the consent screen.`,
       });
     }
-    if (!scopesCover(result.scope, cfg.google.scopes)) {
+    if (!scopesCover(result.scope, requiredScopes)) {
+      const analytics = requiredScopes.includes(GOOGLE_SCOPE_ANALYTICS_READONLY);
+      const keep = analytics
+        ? 'Keep the Search Console and Google Analytics permissions checked.'
+        : 'Keep the Search Console permission checked.';
       return respond(c, 400, 'Authorization failed', {
         error: 'insufficient_scope',
-        error_description: `Google did not grant the required Search Console scope (${cfg.google.scopes.join(' ')}). ` +
-          `Open ${AUTH_BASE_PATH} again and keep the Search Console permission checked.`,
+        error_description: `Google did not grant the required scope (${requiredScopes.join(' ')}). ` +
+          `Open ${AUTH_BASE_PATH}${analytics ? '?ga4=1' : ''} again. ${keep}`,
       });
     }
 
@@ -205,8 +233,9 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     try {
       meta = await svc.tokenStore!.save(result.refreshToken, {
         scope: result.scope,
+        grantedScope: result.grantedScope,
         clientId: cfg.google.clientId!,
-        ...(result.email ? { email: result.email } : {}),
+        ...(email ? { email } : {}),
       });
     } catch (e) {
       // The new refresh token is lost, but Google keeps the grant: a new
@@ -219,6 +248,7 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
     svc.tokenProvider.reset();
+    svc.gsc.router.invalidate();
     if (wantsHtml(c)) {
       // Post/redirect/get: a reload must not resubmit the used code, and the
       // code-bearing URL should not stay the current history entry.
@@ -227,11 +257,14 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         headers: { Location: `${AUTH_BASE_PATH}/status?connected=1`, ...SECURITY_HEADERS },
       });
     }
+    const accounts = await svc.tokenProvider.accounts({ fresh: true });
     return respond(c, 200, 'Google Search Console connected', {
       ok: true,
       email: meta.email ?? null,
       scope: meta.scope,
+      granted_scope: meta.grantedScope ?? 'unknown',
       stored_at: meta.storedAt,
+      connected_accounts: accounts.length,
     });
   });
 
@@ -251,19 +284,39 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
         ? {
             email: status.stored.email ?? null,
             scope: status.stored.scope,
+            granted_scope: status.stored.grantedScope ?? 'unknown',
             stored_at: status.stored.storedAt,
-            covers_required_scope: scopesCover(status.stored.scope, cfg.google.scopes),
+            covers_required_scope: scopesCover(
+              status.stored.grantedScope ?? cfg.google.scopes.join(' '),
+              cfg.google.scopes,
+            ),
             client_matches: status.stored.clientId === cfg.google.clientId,
           }
         : null,
+      accounts: status.accounts.map((a) => accountView(cfg, a)),
       env_refresh_token_configured: Boolean(cfg.google.refreshToken),
       required_scopes: cfg.google.scopes,
       redirect_uri: redirect.ok ? redirect.uri : null,
       last_error: status.error,
-    }, { disconnect: status.source === 'kv' });
+    }, { removable: kvAccountIds(status.accounts) });
   });
 
-  app.post(`${AUTH_BASE_PATH}/revoke`, async (c) => {
+  app.get(`${AUTH_BASE_PATH}/accounts`, async (c) => {
+    const cfg = deps.config();
+    const svc = deps.services();
+    const denied = adminProblem(cfg, c.get('authIdentities'));
+    if (denied) return respond(c, 403, 'Not allowed', { error: 'forbidden', error_description: denied });
+    const accounts = await svc.tokenProvider.accounts({ fresh: true });
+    return respond(c, 200, 'Connected Google accounts', {
+      count: accounts.length,
+      accounts: accounts.map((a) => accountView(cfg, a)),
+    }, { removable: kvAccountIds(accounts) });
+  });
+
+  app.post(`${AUTH_BASE_PATH}/revoke`, removeAccount);
+  app.post(`${AUTH_BASE_PATH}/accounts/remove`, removeAccount);
+
+  async function removeAccount(c: Context): Promise<Response> {
     const cfg = deps.config();
     const svc = deps.services();
     const csrf = crossSiteProblem(c);
@@ -273,14 +326,30 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
     const unavailable = storageProblem(cfg, svc);
     if (unavailable) return respond(c, 503, 'Disconnect unavailable', { error: 'not_configured', error_description: unavailable });
 
-    let refreshToken: string | null = null;
-    let readError: string | null = null;
-    try {
-      refreshToken = (await svc.tokenStore!.loadRefreshToken())?.refreshToken ?? null;
-    } catch (e) {
-      readError = e instanceof Error ? e.message : String(e);
+    const requested = await requestedAccount(c);
+    const kvAccounts = (await svc.tokenProvider.accounts({ fresh: true })).filter((a) => a.source === 'kv');
+    const known = kvAccounts.map((a) => a.email ?? a.id);
+    let target: AccountStatus | undefined;
+    if (requested !== null) {
+      const id = accountIdFor(requested);
+      target = kvAccounts.find((a) => a.id === id || a.id === requested);
+      if (!target) {
+        return respond(c, 404, 'Nothing to disconnect', {
+          revoked: false,
+          deleted: false,
+          error_description: `Google account '${requested}' is not stored in KV.` +
+            (known.length ? ` Stored accounts: ${known.join(', ')}.` : ''),
+        });
+      }
+    } else if (kvAccounts.length > 1) {
+      return respond(c, 400, 'Choose an account', {
+        error: 'account_required',
+        error_description: `Several Google accounts are connected; pass account=<email>. Stored accounts: ${known.join(', ')}.`,
+      });
+    } else {
+      target = kvAccounts[0];
     }
-    if (!refreshToken && !readError) {
+    if (!target) {
       return respond(c, 404, 'Nothing to disconnect', {
         revoked: false,
         deleted: false,
@@ -290,16 +359,27 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
       });
     }
 
+    let refreshToken: string | null = null;
+    let readError: string | null = null;
+    try {
+      refreshToken = (await svc.tokenStore!.loadRefreshToken(target.id))?.refreshToken ?? null;
+    } catch (e) {
+      readError = e instanceof Error ? e.message : String(e);
+    }
+
     // Delete locally first: if KV fails, nothing was revoked and the stored
     // token still works. If Google then cannot be reached, the grant may stay
     // live there, which the response says explicitly.
-    await svc.tokenStore!.clear();
+    await svc.tokenStore!.remove(target.id);
     svc.tokenProvider.reset();
+    svc.gsc.router.invalidate();
     const google = refreshToken
       ? await revokeGoogleToken(fetchImpl, refreshToken)
       : { revoked: false, alreadyInvalid: false, detail: readError };
     const revokedAtGoogle = google.revoked || google.alreadyInvalid;
+    const after = await svc.tokenProvider.status({ fresh: true });
     return respond(c, 200, 'Google Search Console disconnected', {
+      account: target.email ?? target.id,
       deleted: true,
       revoked: revokedAtGoogle,
       ...(revokedAtGoogle
@@ -308,9 +388,51 @@ export function registerGoogleAuthRoutes(app: Hono, deps: GoogleAuthRouteDeps): 
             warning: `Could not revoke the grant at Google (${google.detail ?? 'unknown error'}). ` +
               'Remove access manually at https://myaccount.google.com/permissions.',
           }),
-      active_source: cfg.google.refreshToken ? 'env' : 'none',
+      remaining_accounts: after.accounts.map((a) => a.email ?? a.id),
+      active_source: after.source,
     });
-  });
+  }
+}
+
+/** The `account` parameter of a removal request: query string or urlencoded form field. */
+async function requestedAccount(c: Context): Promise<string | null> {
+  const fromQuery = c.req.query('account');
+  if (fromQuery) return fromQuery.trim();
+  if ((c.req.header('content-type') ?? '').includes('application/x-www-form-urlencoded')) {
+    try {
+      const form = await c.req.parseBody();
+      const v = form.account;
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    } catch {
+      // unreadable body: treated as no parameter
+    }
+  }
+  return null;
+}
+
+/** Account as shown on the status/accounts pages. No secret values. */
+function accountView(cfg: Config, a: AccountStatus): Record<string, unknown> {
+  return {
+    account: a.email ?? a.id,
+    source: a.source,
+    scope: a.stored?.scope ?? null,
+    granted_scope: a.stored?.grantedScope ?? 'unknown',
+    added_at: a.stored?.storedAt ?? null,
+    covers_required_scope: a.stored
+      ? scopesCover(a.stored.grantedScope ?? cfg.google.scopes.join(' '), cfg.google.scopes)
+      : null,
+    available: a.available,
+    error: a.error,
+  };
+}
+
+/** `?ga4=1` (or true/yes) on /auth/google adds analytics.readonly to the request. */
+function wantsAnalytics(value: string | undefined): boolean {
+  return ['1', 'true', 'yes'].includes((value ?? '').toLowerCase());
+}
+
+function kvAccountIds(accounts: AccountStatus[]): string[] {
+  return accounts.filter((a) => a.source === 'kv').map((a) => a.email ?? a.id);
 }
 
 /**
@@ -414,7 +536,7 @@ function respond(
   status: number,
   title: string,
   data: Record<string, unknown>,
-  opts: { disconnect?: boolean } = {},
+  opts: { removable?: string[] } = {},
 ): Response {
   if (!wantsHtml(c)) {
     return new Response(JSON.stringify(data, null, 2), {
@@ -422,7 +544,7 @@ function respond(
       headers: { ...SECURITY_HEADERS, 'Content-Type': 'application/json' },
     });
   }
-  return new Response(renderPage(title, data, opts.disconnect ?? false), { status, headers: HTML_HEADERS });
+  return new Response(renderPage(title, data, opts.removable ?? []), { status, headers: HTML_HEADERS });
 }
 
 function escapeHtml(value: string): string {
@@ -439,6 +561,9 @@ function renderValue(value: unknown): string {
   if (typeof value === 'object' && !Array.isArray(value)) {
     return renderTable(value as Record<string, unknown>);
   }
+  if (Array.isArray(value) && value.some((v) => typeof v === 'object' && v !== null)) {
+    return value.length ? value.map(renderValue).join('') : '<em>none</em>';
+  }
   return escapeHtml(Array.isArray(value) ? value.join(' ') : String(value));
 }
 
@@ -449,7 +574,12 @@ function renderTable(data: Record<string, unknown>): string {
   return `<table>${rows}</table>`;
 }
 
-function renderPage(title: string, data: Record<string, unknown>, disconnect: boolean): string {
+function renderPage(title: string, data: Record<string, unknown>, removable: string[]): string {
+  const forms = removable
+    .map((account) =>
+      `<form method="post" action="${AUTH_BASE_PATH}/revoke"><input type="hidden" name="account" value="${escapeHtml(account)}">` +
+      `<button type="submit">Disconnect ${escapeHtml(account)}</button></form>`)
+    .join('\n');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -469,10 +599,11 @@ a,button{font:inherit}button{padding:.35rem .9rem}
 <h1>${escapeHtml(title)}</h1>
 ${renderTable(data)}
 <nav>
-<a href="${AUTH_BASE_PATH}">Authorize Google</a>
+<a href="${AUTH_BASE_PATH}">Authorize Google${removable.length ? ' (add or refresh an account)' : ''}</a>
+<a href="${AUTH_BASE_PATH}?ga4=1">Authorize Google with Analytics</a>
 <a href="${AUTH_BASE_PATH}/status">Status</a>
-${disconnect ? `<form method="post" action="${AUTH_BASE_PATH}/revoke"><button type="submit">Disconnect</button></form>` : ''}
 </nav>
+${forms ? `<nav>\n${forms}\n</nav>` : ''}
 </body>
 </html>
 `;

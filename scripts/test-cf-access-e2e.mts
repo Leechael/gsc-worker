@@ -35,7 +35,6 @@ async function main(): Promise<void> {
       .sign(privateKey);
 
   console.log('--- env for the main server ---');
-  console.log('MCP_AUTH_MODE=cf-access');
   console.log(`CF_ACCESS_TEAM_DOMAIN=${TEAM}`);
   console.log('CF_ACCESS_AUD=local-test-aud');
   console.log('--- tokens ---');
