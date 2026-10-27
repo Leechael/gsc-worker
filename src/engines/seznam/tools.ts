@@ -1,7 +1,7 @@
 /**
- * Seznam Webmaster tools (seznam_*). Registered (via ./index.ts) only when SEZNAM_API_KEYS or
+ * Seznam Webmaster tools (seznam_*). Registered (via ./index.ts) only when
  * SEZNAM_API_KEY yields at least one site key. Read tools work at every scope
- * tier; seznam_reindex_url needs the write tier (GSC_SCOPES=full), using the
+ * tier; seznam_reindex_url needs the write tier (TOOL_TIER=write), using the
  * same tier order as the Google tools. The API has no delete operations.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -17,8 +17,8 @@ import { toolAnnotations } from '../../mcp/tool-annotations.js';
 
 const KEY_HELP =
   'Generate a key in Seznam Webmaster (https://reporter.seznam.cz/wm/): open the site, go to the API section and create an access key ' +
-  '(read, or write for seznam_reindex_url). Store it in SEZNAM_API_KEYS (JSON {"site":"key"}) with `npx wrangler secret put SEZNAM_API_KEYS`, ' +
-  'or in SEZNAM_API_KEY for a single site.';
+  '(read, or write for seznam_reindex_url). Store it in SEZNAM_API_KEY with `npx wrangler secret put SEZNAM_API_KEY`: ' +
+  'the key itself for one site, or a JSON object {"site":"key"} for several.';
 
 export const SEZNAM_LABEL = 'Seznam Webmaster';
 
@@ -150,7 +150,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
     },
     async () => jsonResult({
       count: sites.length,
-      sites: sites.map((s) => ({ site: s.label, ...(s.host === null ? { note: 'SEZNAM_API_KEY (used when no other entry matches)' } : {}) })),
+      sites: sites.map((s) => ({ site: s.label, ...(s.host === null ? { note: 'SEZNAM_API_KEY (single key)' } : {}) })),
       ...(configError ? { warning: configError } : {}),
       limits: SEZNAM_LIMITS,
     }),
@@ -263,7 +263,7 @@ export function registerSeznamTools(server: McpServer, svc: ServerServices, clie
       title: 'Seznam: request reindexing',
       description:
         'Ask Seznam to reindex one URL (POST /web/document/reindex). Needs a key with write rights; Seznam allows at most 500 reindex requests a day. ' +
-        'Requires the write tier (GSC_SCOPES=full).',
+        'Requires the write tier (TOOL_TIER=write).',
       inputSchema: z.object({ url: z.string().url().describe('Absolute URL of the page.'), site: siteArg }),
     },
     async (a) => {

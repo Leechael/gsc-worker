@@ -1,11 +1,11 @@
 import type { EngineModule } from '../types.js';
-import { SEZNAM_KEYS_ENV, SEZNAM_KEY_ENV, parseSeznamSites } from './sites.js';
+import { SEZNAM_KEY_ENV, parseSeznamSites } from './sites.js';
 import { SEZNAM_LABEL, SEZNAM_TOOLS, registerSeznamTools } from './tools.js';
 
 export const seznamEngine: EngineModule = {
   id: 'seznam',
   label: SEZNAM_LABEL,
-  enableVar: `${SEZNAM_KEYS_ENV} or ${SEZNAM_KEY_ENV}`,
+  enableVar: SEZNAM_KEY_ENV,
   // Enabled once at least one usable site key is configured.
   enabled: (config) => parseSeznamSites(config).sites.length > 0,
   statusLines(config) {

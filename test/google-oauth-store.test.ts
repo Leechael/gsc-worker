@@ -254,7 +254,7 @@ test('emailFromIdToken reads the email claim and tolerates junk', () => {
 // ---------- config validation ----------
 
 function workerConfig(env: Record<string, unknown>) {
-  setEnvSource({ MCP_AUTH_MODE: 'bearer', MCP_AUTH_TOKEN: 'x'.repeat(40), MCP_ALLOWED_HOSTS: 'gsc.example.com', ...env });
+  setEnvSource({ MCP_AUTH_TOKEN: 'x'.repeat(40), MCP_ALLOWED_HOSTS: 'gsc.example.com', ...env });
   const cfg = parseConfig();
   setEnvSource(process.env as Record<string, unknown>);
   return cfg;

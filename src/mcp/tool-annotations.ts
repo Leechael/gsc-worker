@@ -7,7 +7,7 @@
  * - read: readOnlyHint true.
  * - write: readOnlyHint false, destructiveHint false.
  * - destructive: readOnlyHint false, destructiveHint true. This follows the
- *   GSC_ALLOW_DESTRUCTIVE gate, so add_site is marked destructive too.
+ *   TOOL_TIER=destructive gate, so add_site is marked destructive too.
  * - idempotentHint (non-read tools only) is true only when repeating the
  *   call leaves the remote state unchanged and spends no quota.
  * - openWorldHint is false for tools that only reach a fixed search-engine

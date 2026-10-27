@@ -4,7 +4,7 @@
  * - the hints follow the tool's tier in its tier table
  * - the tier gates in the tool code agree with those tables, so the set of
  *   tools marked destructive is exactly the set gated behind
- *   GSC_ALLOW_DESTRUCTIVE
+ *   TOOL_TIER=destructive
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';

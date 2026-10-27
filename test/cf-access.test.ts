@@ -21,8 +21,6 @@ const publicJwk = { ...(await exportJWK(publicKey)), kid, alg: 'RS256', use: 'si
 const cfg: CfAccessConfig = {
   teamDomain: TEAM,
   aud: [AUD],
-  allowedEmails: [],
-  allowedServiceTokens: [],
 };
 
 const auth = buildCfAccessAuthenticator(cfg, { jwks: { keys: [publicJwk] } });
@@ -109,32 +107,6 @@ test('plaintext identity header only → 401; we never trust it', async () => {
   const out = await auth(req({ 'cf-access-authenticated-user-email': 'ada@example.com' }));
   assert.equal(out.kind, 'deny');
   if (out.kind === 'deny') assert.equal(out.response.status, 401);
-});
-
-test('email allowlist: listed passes, unlisted → 403', async () => {
-  const listed = buildCfAccessAuthenticator(
-    { ...cfg, allowedEmails: ['ada@example.com'] },
-    { jwks: { keys: [publicJwk] } },
-  );
-  const okOut = await listed(req({ 'cf-access-jwt-assertion': await sign({ email: 'ada@example.com' }) }));
-  assert.equal(okOut.kind, 'ok');
-
-  const denyOut = await listed(req({ 'cf-access-jwt-assertion': await sign({ email: 'mallory@example.com' }) }));
-  assert.equal(denyOut.kind, 'deny');
-  if (denyOut.kind === 'deny') assert.equal(denyOut.response.status, 403);
-});
-
-test('service-token allowlist: unlisted service token → 403; users unaffected', async () => {
-  const gated = buildCfAccessAuthenticator(
-    { ...cfg, allowedServiceTokens: ['ci-bot-id'] },
-    { jwks: { keys: [publicJwk] } },
-  );
-  const denyOut = await gated(req({ 'cf-access-jwt-assertion': await sign({ common_name: 'rogue-bot' }) }));
-  assert.equal(denyOut.kind, 'deny');
-  if (denyOut.kind === 'deny') assert.equal(denyOut.response.status, 403);
-
-  const okOut = await gated(req({ 'cf-access-jwt-assertion': await sign({ common_name: 'ci-bot-id' }) }));
-  assert.equal(okOut.kind, 'ok');
 });
 
 test('no identity claims at all → 401', async () => {

@@ -199,7 +199,7 @@ test('a scope-tier refusal is an error result', async () => {
   registerPropertiesTools(server, svc);
   const result = await toolsOf(server).add_site!.executor({ site_url: 'https://example.com/' }, {});
   assert.equal(result.isError, true);
-  assert.match(result.content[0]!.text, /disabled at the current scope tier/);
+  assert.match(result.content[0]!.text, /disabled at the current tool tier/);
 });
 
 test('manage_sitemaps submit and delete are refused at the read tier without calling Google', async () => {
@@ -215,7 +215,7 @@ test('manage_sitemaps submit and delete are refused at the read tier without cal
   const submitBody = JSON.parse(submit.content[0]!.text) as { error?: string; resolution?: string; granted_scope?: string };
   assert.equal(submitBody.error, 'insufficient_granted_scope');
   assert.equal(submitBody.granted_scope, 'unknown');
-  assert.match(submitBody.resolution ?? '', /GSC_SCOPES=full/);
+  assert.match(submitBody.resolution ?? '', /TOOL_TIER=write or destructive/);
   const del = await toolsOf(server).manage_sitemaps!.executor(
     { site_url: 'sc-domain:example.com', action: 'delete', sitemap_url: 'https://example.com/sitemap.xml' },
     {},
@@ -300,7 +300,6 @@ function statusSvc(status: number, body: unknown, scopeTier: 'read' | 'destructi
     config: {
       ...parsed,
       scopeTier,
-      allowDestructive: scopeTier === 'destructive',
       google: {
         ...parsed.google,
         scopes: scopeTier === 'destructive' ? [GOOGLE_SCOPE_FULL] : parsed.google.scopes,

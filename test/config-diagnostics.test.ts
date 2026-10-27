@@ -43,7 +43,6 @@ function request(app: ReturnType<typeof buildApp>, path: string) {
 
 test('invalid Worker config: requests get a generic 503 and the cause is logged once', async () => {
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GSC_TOKENS: new MemoryKv(),
@@ -66,7 +65,7 @@ test('invalid Worker config: requests get a generic 503 and the cause is logged 
 });
 
 test('Worker without MCP_ALLOWED_HOSTS warns once that every request will be rejected', async () => {
-  setEnvSource({ MCP_AUTH_MODE: 'bearer', MCP_AUTH_TOKEN: TOKEN });
+  setEnvSource({ MCP_AUTH_TOKEN: TOKEN });
   const cfg = parseConfig();
   assert.ok(validateHttpWarnings(cfg, 'worker').some((w) => w.includes('MCP_ALLOWED_HOSTS')));
   assert.ok(!validateHttpWarnings(cfg).some((w) => w.includes('MCP_ALLOWED_HOSTS')), 'Node entry has its own check');
@@ -106,18 +105,18 @@ async function capabilities(env: Record<string, unknown>, stored?: { scope: stri
 
 const CLIENT = { GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'sec' };
 
-test('get_capabilities flags a stored grant that does not cover GSC_SCOPES', async () => {
+test('get_capabilities flags a stored grant that does not cover the TOOL_TIER scope', async () => {
   const text = await capabilities(
-    { ...CLIENT, GSC_SCOPES: 'full' },
+    { ...CLIENT, TOOL_TIER: 'write' },
     { scope: GOOGLE_SCOPE_READONLY, grantedScope: GOOGLE_SCOPE_READONLY },
   );
-  assert.match(text, /does not cover the configured GSC_SCOPES/);
+  assert.match(text, /does not cover the scope TOOL_TIER=/);
   assert.match(text, /\/auth\/google/);
 });
 
 test('get_capabilities treats a legacy record without granted scope as unknown', async () => {
-  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full' }, { scope: GOOGLE_SCOPE_READONLY });
-  assert.doesNotMatch(text, /does not cover the configured GSC_SCOPES/);
+  const text = await capabilities({ ...CLIENT, TOOL_TIER: 'write' }, { scope: GOOGLE_SCOPE_READONLY });
+  assert.doesNotMatch(text, /does not cover the scope TOOL_TIER=/);
   assert.match(text, /granted scope unknown/);
 });
 
@@ -149,24 +148,24 @@ test('get_capabilities does not report ready when the stored grant belongs to an
 test('get_capabilities at the read tier hints at both write and destructive tools', async () => {
   const text = await capabilities({ ...CLIENT });
   assert.match(text, /Not enabled at the current tier:/);
-  assert.match(text, /write tools: set GSC_SCOPES=full/);
-  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): additionally set GSC_ALLOW_DESTRUCTIVE=true/);
+  assert.match(text, /write tools: set TOOL_TIER=write/);
+  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): set TOOL_TIER=destructive/);
   assert.doesNotMatch(text, /Write \(scope tier write\):/);
 });
 
 test('get_capabilities at the write tier lists write tools and hints only at destructive tools', async () => {
-  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full' });
+  const text = await capabilities({ ...CLIENT, TOOL_TIER: 'write' });
   assert.match(text, /Write \(scope tier write\):\n  - submit_sitemap/);
   assert.match(text, /Not enabled at the current tier:/);
-  assert.doesNotMatch(text, /write tools: set GSC_SCOPES=full/);
-  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): set GSC_ALLOW_DESTRUCTIVE=true/);
-  assert.doesNotMatch(text, /Destructive \(GSC_ALLOW_DESTRUCTIVE=true\):/);
+  assert.doesNotMatch(text, /write tools: set TOOL_TIER=write/);
+  assert.match(text, /destructive tools \(add_site\/delete_site\/delete_sitemap\): set TOOL_TIER=destructive/);
+  assert.doesNotMatch(text, /Destructive \(TOOL_TIER=destructive\):/);
 });
 
 test('get_capabilities at the destructive tier has no not-enabled hints', async () => {
-  const text = await capabilities({ ...CLIENT, GSC_SCOPES: 'full', GSC_ALLOW_DESTRUCTIVE: 'true' });
+  const text = await capabilities({ ...CLIENT, TOOL_TIER: 'destructive' });
   assert.match(text, /Write \(scope tier write\):/);
-  assert.match(text, /Destructive \(GSC_ALLOW_DESTRUCTIVE=true\):\n  - add_site/);
+  assert.match(text, /Destructive \(TOOL_TIER=destructive\):\n  - add_site/);
   assert.doesNotMatch(text, /Not enabled at the current tier/);
 });
 
@@ -181,12 +180,12 @@ async function reauthenticateText(env: Record<string, unknown>): Promise<string>
 }
 
 test('reauthenticate describes the configured /auth/google checks', async () => {
-  const both = await reauthenticateText({ MCP_AUTH_MODE: 'cf-access,bearer' });
+  const both = await reauthenticateText({ CF_ACCESS_TEAM_DOMAIN: 'https://t.cloudflareaccess.com', CF_ACCESS_AUD: 'a', MCP_AUTH_TOKEN: 'x'.repeat(32) });
   assert.match(both, /it takes a Cloudflare Access user login \(service tokens are refused\) and the MCP_AUTH_TOKEN\./);
   assert.doesNotMatch(both.split('\n').find((l) => l.startsWith('Only the'))!, / or /);
-  assert.match(await reauthenticateText({ MCP_AUTH_MODE: 'cf-access' }), /it takes a Cloudflare Access user login \(service tokens are refused\)\./);
-  assert.match(await reauthenticateText({ MCP_AUTH_MODE: 'bearer' }), /it takes the MCP_AUTH_TOKEN\./);
-  const withAdmins = await reauthenticateText({ MCP_AUTH_MODE: 'cf-access', GOOGLE_AUTH_ADMINS: 'ops@example.com' });
+  assert.match(await reauthenticateText({ CF_ACCESS_TEAM_DOMAIN: 'https://t.cloudflareaccess.com', CF_ACCESS_AUD: 'a' }), /it takes a Cloudflare Access user login \(service tokens are refused\)\./);
+  assert.match(await reauthenticateText({ MCP_AUTH_TOKEN: 'x'.repeat(32) }), /it takes the MCP_AUTH_TOKEN\./);
+  const withAdmins = await reauthenticateText({ CF_ACCESS_TEAM_DOMAIN: 'https://t.cloudflareaccess.com', CF_ACCESS_AUD: 'a', GOOGLE_AUTH_ADMINS: 'ops@example.com' });
   assert.match(withAdmins, /it takes a Cloudflare Access login, with one of those identities listed in GOOGLE_AUTH_ADMINS\./);
   assert.doesNotMatch(withAdmins, /ops@example\.com/, 'admin identities are not disclosed to MCP clients');
 });

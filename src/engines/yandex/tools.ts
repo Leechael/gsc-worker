@@ -1,9 +1,9 @@
 /**
  * Yandex Webmaster tools (yandex_*). Registered (via ./index.ts) only when
  * YANDEX_OAUTH_TOKEN is set. Read tools work at every scope tier; yandex_add_sitemap and
- * yandex_recrawl_url need the write tier (GSC_SCOPES=full), and
- * yandex_delete_sitemap needs the destructive tier (plus
- * GSC_ALLOW_DESTRUCTIVE=true), using the same tier order as the Google tools.
+ * yandex_recrawl_url need the write tier (TOOL_TIER=write), and
+ * yandex_delete_sitemap needs the destructive tier (TOOL_TIER=destructive),
+ * using the same tier order as the Google tools.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -587,7 +587,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
     {
       annotations: toolAnnotations(YANDEX_TOOLS, 'yandex_add_sitemap'),
       title: 'Yandex: add a sitemap',
-      description: 'Add a sitemap file URL to the site in Yandex Webmaster. Requires the write tier (GSC_SCOPES=full).',
+      description: 'Add a sitemap file URL to the site in Yandex Webmaster. Requires the write tier (TOOL_TIER=write).',
       inputSchema: z.object({ host: hostArg, sitemap_url: z.string().url().describe('Absolute URL of the sitemap file.') }),
     },
     async (a) => {
@@ -607,7 +607,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
       title: 'Yandex: send a page for recrawl',
       description:
         'Send one URL of the site to the Yandex recrawl queue. Uses the per-site daily quota (see yandex_get_recrawl_quota); returns task_id and quota_remainder. ' +
-        'Requires the write tier (GSC_SCOPES=full).',
+        'Requires the write tier (TOOL_TIER=write).',
       inputSchema: z.object({ host: hostArg, url: z.string().url().describe('Absolute URL of a page on this site.') }),
     },
     async (a) => {
@@ -629,7 +629,7 @@ export function registerYandexTools(server: McpServer, svc: ServerServices, clie
       title: 'Yandex: remove a sitemap',
       description:
         'Remove a sitemap that was added in Yandex Webmaster (sitemap_id from yandex_list_user_sitemaps). ' +
-        'Requires the destructive tier (GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true).',
+        'Requires the destructive tier (TOOL_TIER=destructive).',
       inputSchema: z.object({ host: hostArg, sitemap_id: sitemapIdArg }),
     },
     async (a) => {

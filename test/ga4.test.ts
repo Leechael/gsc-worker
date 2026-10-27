@@ -148,7 +148,7 @@ test('hasAnalyticsReadScope and scopesCover treat analytics as covering readonly
 test('default Google scopes never include analytics (a leftover GA4_ENABLED is ignored)', () => {
   setEnvSource({});
   assert.deepEqual(parseConfig().google.scopes, [GOOGLE_SCOPE_READONLY]);
-  setEnvSource({ GA4_ENABLED: 'true', GSC_SCOPES: 'full' });
+  setEnvSource({ GA4_ENABLED: 'true', TOOL_TIER: 'write' });
   assert.deepEqual(parseConfig().google.scopes, [GOOGLE_SCOPE_FULL]);
 });
 
@@ -219,7 +219,7 @@ test('get_capabilities marks a Search Console-only grant as no analytics, withou
   const text = (await toolsOf(server).get_capabilities!.executor({}, {})).content[0]!.text;
   assert.doesNotMatch(text, /does not include analytics/);
   assert.match(text, /granted scope readonly, no analytics/);
-  assert.doesNotMatch(text, /does not cover the configured GSC_SCOPES/);
+  assert.doesNotMatch(text, /does not cover the scope TOOL_TIER=/);
 });
 
 // ---------- OAuth ----------
@@ -228,7 +228,6 @@ test('start requests analytics.readonly only with ?ga4=1, and always keeps grant
   function setup(env: Record<string, unknown> = {}) {
     const kv = new MemoryKv();
     setEnvSource({
-      MCP_AUTH_MODE: 'bearer',
       MCP_AUTH_TOKEN: TOKEN,
       MCP_ALLOWED_HOSTS: HOST,
       GOOGLE_CLIENT_ID: CLIENT,
@@ -265,7 +264,6 @@ test('start requests analytics.readonly only with ?ga4=1, and always keeps grant
 test('callback refuses a grant without analytics.readonly when ?ga4=1 asked for it', async () => {
   const kv = new MemoryKv();
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GOOGLE_CLIENT_ID: CLIENT,

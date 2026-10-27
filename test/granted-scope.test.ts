@@ -1,7 +1,7 @@
 /**
  * Write-tier checks use the scope Google actually granted to the account
  * that owns the property. Legacy records without that field fall back to
- * GSC_SCOPES and show as unknown in status output.
+ * the TOOL_TIER scope and show as unknown in status output.
  */
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -123,8 +123,7 @@ async function writeHarness(opts: {
     return new Response('{}', { status: 200 });
   }) as typeof fetch;
   setEnvSource({
-    GSC_SCOPES: scopes.includes(GOOGLE_SCOPE_FULL) ? 'full' : 'readonly',
-    ...(opts.allowDestructive ? { GSC_ALLOW_DESTRUCTIVE: 'true' } : {}),
+    TOOL_TIER: !scopes.includes(GOOGLE_SCOPE_FULL) ? 'read' : opts.allowDestructive ? 'destructive' : 'write',
   });
   const config = parseConfig();
   const gsc = new GscClient({ tokenProvider, fetchImpl: gscFetch });
@@ -154,7 +153,7 @@ test('submit_sitemap is refused when the property account lacks the webmasters s
   assert.equal(body.granted_scope, GOOGLE_SCOPE_READONLY);
   assert.equal(body.required_scope, GOOGLE_SCOPE_FULL);
   assert.match(body.resolution, /\/auth\/google/);
-  assert.match(body.resolution, /GSC_SCOPES=full/);
+  assert.match(body.resolution, /TOOL_TIER=write or destructive/);
   assert.equal(calls.filter((c) => c.method === 'PUT').length, 0);
 });
 
@@ -168,7 +167,7 @@ test('submit_sitemap uses the account that owns the property when another accoun
   assert.deepEqual(calls.filter((c) => c.method === 'PUT').map((c) => c.token), ['at-rt-bob']);
 });
 
-test('unknown granted scope falls back to GSC_SCOPES for the write check', async () => {
+test('unknown granted scope falls back to the TOOL_TIER scope for the write check', async () => {
   const allowed = await writeHarness({
     granted: { 'ada@example.com': null },
     scopes: [GOOGLE_SCOPE_FULL],
@@ -190,7 +189,7 @@ test('unknown granted scope falls back to GSC_SCOPES for the write check', async
   assert.equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text) as { granted_scope: string; resolution: string };
   assert.equal(body.granted_scope, 'unknown');
-  assert.match(body.resolution, /GSC_SCOPES=full/);
+  assert.match(body.resolution, /TOOL_TIER=write or destructive/);
 });
 
 test('get_capabilities lists per-account granted scope and /health stays counts-only', async () => {
@@ -204,12 +203,11 @@ test('get_capabilities lists per-account granted scope and /health stays counts-
 
   const kv = new MemoryKv();
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GOOGLE_CLIENT_ID: CLIENT,
     GOOGLE_CLIENT_SECRET: 'sec',
-    GSC_SCOPES: 'full',
+    TOOL_TIER: 'write',
     GSC_TOKENS: kv,
     TOKEN_ENCRYPTION_KEY: KEY,
   });

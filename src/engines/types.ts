@@ -4,7 +4,7 @@
  *
  * Each engine is opt-in: its tools are registered only when enabled() is true
  * (a secret; GA4 is always on and gated by the Google grant). Write and destructive tools reuse the
- * scope tier from GSC_SCOPES / GSC_ALLOW_DESTRUCTIVE, so one switch governs
+ * tool tier from TOOL_TIER, so one switch governs
  * every engine. GA4 itself is read-only.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -56,20 +56,10 @@ export function engineTierGate(
   engineLabel: string,
 ): string | null {
   if (tierGateMessage(tier, tool, required) === null) return null;
-  const googleNote =
-    '  Note: GSC_SCOPES=full also switches the Google grant to the full "webmasters" scope; ' +
-    're-authorize Google (/auth/google on Workers, or npm run auth -- --scopes full) or Google write tools will fail.';
-  if (required === 'destructive') {
-    return (
-      `Safety: ${tool} removes data from ${engineLabel} and is disabled at the current scope tier (${tier}).\n` +
-      'To enable it, set GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true in the server environment and restart (or redeploy).\n' +
-      googleNote
-    );
-  }
+  const verb = required === 'destructive' ? 'removes data from' : 'changes data in';
   return (
-    `Safety: ${tool} changes data in ${engineLabel} and is disabled at the current scope tier (${tier}).\n` +
-    'To enable it, set GSC_SCOPES=full in the server environment and restart (or redeploy).\n' +
-    googleNote
+    `Safety: ${tool} ${verb} ${engineLabel} and is disabled at the current tool tier (${tier}).\n` +
+    `To enable it, set TOOL_TIER=${required} in the server environment and restart (or redeploy).`
   );
 }
 

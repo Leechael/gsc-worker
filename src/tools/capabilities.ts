@@ -88,7 +88,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         const gscScopes = svc.config.google.scopes.filter((s) => s.includes('/auth/webmasters'));
         if (granted !== null && !scopesCover(granted, gscScopes)) {
           authStatus +=
-            `\n⚠️ The granted scope (${granted}) does not cover the configured GSC_SCOPES; ` +
+            `\n⚠️ The granted scope (${granted}) does not cover the scope TOOL_TIER=${svc.config.scopeTier} needs; ` +
             'tools needing the missing scope will fail. Re-authorize at https://<worker-host>/auth/google.';
         }
       }
@@ -102,7 +102,7 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
       const lines: string[] = [
         'Google Search Console MCP Server (TypeScript)',
         '',
-        `SCOPE TIER: ${tier} (GSC_SCOPES=${svc.config.google.scopes.includes('https://www.googleapis.com/auth/webmasters') ? 'full' : 'readonly'}${svc.config.allowDestructive ? ', GSC_ALLOW_DESTRUCTIVE=true' : ''})`,
+        `TOOL TIER: ${tier} (TOOL_TIER)`,
         '',
         'AUTH STATUS:',
         authStatus,
@@ -137,15 +137,11 @@ export function registerCapabilitiesTools(server: McpServer, svc: ServerServices
         lines.push('', 'Write (scope tier write):', ...TIER_TOOLS.write!.map((t) => `  - ${t}`));
       }
       if (tier === 'destructive') {
-        lines.push('', 'Destructive (GSC_ALLOW_DESTRUCTIVE=true):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
+        lines.push('', 'Destructive (TOOL_TIER=destructive):', ...TIER_TOOLS.destructive!.map((t) => `  - ${t}`));
       } else {
         const notEnabled: string[] = [];
-        if (tier === 'read') notEnabled.push('  - write tools: set GSC_SCOPES=full');
-        notEnabled.push(
-          tier === 'read'
-            ? '  - destructive tools (add_site/delete_site/delete_sitemap): additionally set GSC_ALLOW_DESTRUCTIVE=true'
-            : '  - destructive tools (add_site/delete_site/delete_sitemap): set GSC_ALLOW_DESTRUCTIVE=true',
-        );
+        if (tier === 'read') notEnabled.push('  - write tools: set TOOL_TIER=write');
+        notEnabled.push('  - destructive tools (add_site/delete_site/delete_sitemap): set TOOL_TIER=destructive');
         lines.push('', 'Not enabled at the current tier:', ...notEnabled);
       }
       lines.push(...engineCapabilityLines(svc.config), '', AEO_GEO_BOUNDARY, '');

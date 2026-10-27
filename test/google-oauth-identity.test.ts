@@ -55,7 +55,6 @@ function setup(env: Record<string, unknown> = {}) {
     throw new Error(`unexpected fetch ${url}`);
   }) as typeof fetch;
   setEnvSource({
-    MCP_AUTH_MODE: 'cf-access',
     CF_ACCESS_TEAM_DOMAIN: TEAM,
     CF_ACCESS_AUD: AUD,
     MCP_ALLOWED_HOSTS: HOST,
@@ -138,7 +137,7 @@ test('GOOGLE_AUTH_ADMINS restricts connect/disconnect to the listed identities',
 });
 
 test('cf-access,bearer: state binds to the Access identity, not the shared bearer', async () => {
-  const { call, googleCalls } = setup({ MCP_AUTH_MODE: 'cf-access,bearer', MCP_AUTH_TOKEN: BEARER });
+  const { call, googleCalls } = setup({ MCP_AUTH_TOKEN: BEARER });
   const bearer = { authorization: `Bearer ${BEARER}` };
   const state = await start(call, await user('ada@example.com'), bearer);
   const res = await call(`/auth/google/callback?code=c&state=${state}`, await user('mallory@example.com'), { headers: bearer });
@@ -147,7 +146,7 @@ test('cf-access,bearer: state binds to the Access identity, not the shared beare
 });
 
 test('a missing Access JWT is rejected even with the bearer token in combined mode', async () => {
-  const { call } = setup({ MCP_AUTH_MODE: 'cf-access,bearer', MCP_AUTH_TOKEN: BEARER });
+  const { call } = setup({ MCP_AUTH_TOKEN: BEARER });
   const res = await call('/auth/google', null, { headers: { authorization: `Bearer ${BEARER}` } });
   assert.equal(res.status, 401);
 });

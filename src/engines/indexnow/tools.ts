@@ -1,6 +1,6 @@
 /**
  * IndexNow MCP tools (indexnow_*). Registered only when INDEXNOW_KEY is set.
- * indexnow_submit_urls needs the write tier (GSC_SCOPES=full);
+ * indexnow_submit_urls needs the write tier (TOOL_TIER=write);
  * indexnow_check_key_file is read-only and only fetches the key file on a host
  * the operator allowed (INDEXNOW_HOSTS, or the host of an absolute
  * INDEXNOW_KEY_LOCATION).
@@ -40,7 +40,7 @@ export function registerIndexNowTools(server: McpServer, svc: ServerServices, cf
         `Notify search engines that URLs were added, updated or deleted, via IndexNow (${INDEXNOW_ENDPOINT}). ` +
         'Participating engines share submissions with each other (Bing, Yandex, Seznam, Naver, Yep and others; not Google). ' +
         `Up to ${INDEXNOW_MAX_URLS} URLs per call, all on the same host; the host is taken from the URLs. ` +
-        'The key file must be hosted on that host. A 200/202 answer means received, not indexed. Requires GSC_SCOPES=full.',
+        'The key file must be hosted on that host. A 200/202 answer means received, not indexed. Requires TOOL_TIER=write.',
       inputSchema: z.object({
         urls: z.array(z.string().min(1)).min(1).max(INDEXNOW_MAX_URLS).describe('Absolute http(s) URLs on one host.'),
       }),

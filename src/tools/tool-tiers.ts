@@ -24,7 +24,7 @@ export const GSC_TOOLS: readonly ToolPolicy[] = [
   { name: 'get_sitemap_details', tier: 'read' },
   // sitemaps.submit is a PUT: resubmitting the same sitemap is a no-op.
   { name: 'submit_sitemap', tier: 'write', idempotent: true },
-  // Gated destructive (GSC_ALLOW_DESTRUCTIVE) even though it adds rather than removes.
+  // Gated destructive (TOOL_TIER=destructive) even though it adds rather than removes.
   { name: 'add_site', tier: 'destructive', idempotent: true },
   { name: 'delete_site', tier: 'destructive', idempotent: true },
   { name: 'delete_sitemap', tier: 'destructive', idempotent: true },

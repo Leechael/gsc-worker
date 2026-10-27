@@ -1,7 +1,7 @@
 /**
  * Bing Webmaster Tools MCP tools (bing_*). Registered only when BING_API_KEY
  * is set. Read tools always run; submit tools need the write tier
- * (GSC_SCOPES=full) and bing_remove_feed the destructive tier.
+ * (TOOL_TIER=write) and bing_remove_feed the destructive tier.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -549,7 +549,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
       description:
         `Submit up to ${BING_SUBMIT_BATCH_MAX} URLs of a verified site to Bing for crawling (SubmitUrl for one, SubmitUrlBatch for several). ` +
         'Uses the site\'s daily URL submission quota (see bing_get_url_submission_quota). Microsoft recommends IndexNow for routine submissions. ' +
-        'Requires GSC_SCOPES=full.',
+        'Requires TOOL_TIER=write.',
       inputSchema: z.object({
         site_url: siteUrlSchema,
         urls: z.array(z.string().min(1)).min(1).max(BING_SUBMIT_BATCH_MAX).describe(`Absolute http(s) URLs (1-${BING_SUBMIT_BATCH_MAX}).`),
@@ -590,7 +590,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
     {
       annotations: toolAnnotations(BING_TOOLS, 'bing_submit_feed'),
       title: 'Bing: submit sitemap/feed',
-      description: 'Submit a sitemap or feed for a site to Bing Webmaster Tools (SubmitFeed). Requires GSC_SCOPES=full.',
+      description: 'Submit a sitemap or feed for a site to Bing Webmaster Tools (SubmitFeed). Requires TOOL_TIER=write.',
       inputSchema: z.object(feedShape),
     },
     async ({ site_url, feed_url }) => {
@@ -611,7 +611,7 @@ export function registerBingTools(server: McpServer, svc: ServerServices, client
     {
       annotations: toolAnnotations(BING_TOOLS, 'bing_remove_feed'),
       title: 'Bing: remove sitemap/feed',
-      description: 'Remove a submitted sitemap or feed from Bing Webmaster Tools (RemoveFeed). Requires GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true.',
+      description: 'Remove a submitted sitemap or feed from Bing Webmaster Tools (RemoveFeed). Requires TOOL_TIER=destructive.',
       inputSchema: z.object(feedShape),
     },
     async ({ site_url, feed_url }) => {

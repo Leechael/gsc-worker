@@ -17,8 +17,8 @@ export function registerEngineTools(server: McpServer, svc: ServerServices): voi
 
 const TIER_HINT = {
   read: '',
-  write: 'needs GSC_SCOPES=full',
-  destructive: 'needs GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true',
+  write: 'needs TOOL_TIER=write',
+  destructive: 'needs TOOL_TIER=destructive',
 } as const;
 
 /** get_capabilities section: which engines are enabled. Never prints secret values. */

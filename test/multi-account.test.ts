@@ -457,7 +457,6 @@ test('add_site with several accounts requires an explicit account', async () => 
     config: {
       ...svc.config,
       scopeTier: 'destructive' as const,
-      allowDestructive: true,
       google: { ...svc.config.google, scopes: [GOOGLE_SCOPE_FULL] },
     },
   };
@@ -486,12 +485,11 @@ const TOKEN = 'b'.repeat(48);
 function app(env: Record<string, unknown> = {}) {
   const kv = new MemoryKv();
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GOOGLE_CLIENT_ID: CLIENT,
     GOOGLE_CLIENT_SECRET: 'sec',
-    GSC_SCOPES: 'full',
+    TOOL_TIER: 'write',
     GSC_TOKENS: kv,
     TOKEN_ENCRYPTION_KEY: KEY,
     ...env,

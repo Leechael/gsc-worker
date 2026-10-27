@@ -23,7 +23,6 @@ afterEach(() => {
 function setup(env: Record<string, unknown> = {}, entry: 'worker' | 'node' = 'worker') {
   const kv = new MemoryKv();
   setEnvSource({
-    MCP_AUTH_MODE: 'bearer',
     MCP_AUTH_TOKEN: TOKEN,
     MCP_ALLOWED_HOSTS: HOST,
     GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
@@ -96,7 +95,6 @@ test('every /auth route rejects unauthenticated requests on Workers', async () =
 
 test('cf-access mode: /auth requires the Access JWT header', async () => {
   const { call } = setup({
-    MCP_AUTH_MODE: 'cf-access',
     CF_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
     CF_ACCESS_AUD: 'aud',
   });
@@ -150,8 +148,8 @@ test('start redirects to Google with offline access, consent, scope, state and S
   }
 });
 
-test('start requests the full webmasters scope only when GSC_SCOPES=full', async () => {
-  const { call } = setup({ GSC_SCOPES: 'full' });
+test('start requests the full webmasters scope only when TOOL_TIER is write or above', async () => {
+  const { call } = setup({ TOOL_TIER: 'write' });
   const { location } = await startFlow(call);
   assert.ok(location.searchParams.get('scope')!.split(' ').includes(GOOGLE_SCOPE_FULL));
   assert.ok(!location.searchParams.get('scope')!.split(' ').includes(GOOGLE_SCOPE_READONLY));

@@ -52,7 +52,7 @@ export interface StoredTokenMeta {
   /**
    * Scope string Google returned on the token response. null when the record
    * predates granted-scope tracking (or Google omitted `scope`); write-tier
-   * checks then fall back to GSC_SCOPES, and status shows it as unknown.
+   * checks then fall back to the scope TOOL_TIER requests, and status shows it as unknown.
    */
   grantedScope: string | null;
   clientId: string;

@@ -12,9 +12,9 @@ export type AuthBuildResult =
   | { ok: false; errors: string[] };
 
 /**
- * Compose the authenticator for `MCP_AUTH_MODE` (plan §6.5).
+ * Compose the authenticator from the configured checks (plan §6.5).
  *
- * Comma-separated modes ALL must pass (defense in depth, §6.5.1). Every check
+ * Every configured check must pass (defense in depth, §6.5.1). Every check
  * produces an SDK AuthInfo; the last one wins for `authInfo` pass-through to
  * createMcpHandler. Callers must run validateHttpConfig() first — this builder
  * fails closed (503) when startup validation failed.
@@ -49,16 +49,13 @@ function buildUncached(cfg: Config, startupErrors: string[]): AuthBuildResult {
       case 'cf-access':
         checks.push(buildCfAccessAuthenticator(cfg.auth.cfAccess!));
         break;
-      case 'oauth':
-        // Rejected by startup validation; stay closed.
-        return { ok: false, errors: ["MCP_AUTH_MODE 'oauth' is not implemented in this build (milestone M5)."] };
     }
   }
 
   if (checks.length === 0) {
     // Defense in depth (review P1-1): never authenticate when there is
     // nothing to check, even if startup validation was somehow bypassed.
-    return { ok: false, errors: ['No authentication checks configured (empty MCP_AUTH_MODE).'] };
+    return { ok: false, errors: ['No authentication checks configured.'] };
   }
 
   return {

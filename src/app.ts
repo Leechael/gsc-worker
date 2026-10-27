@@ -15,7 +15,7 @@ import { getServices } from './mcp/context.js';
 import { buildMcpServer } from './mcp/server.js';
 
 /**
- * Hono app: Host/Origin validation → MCP_AUTH_MODE 鉴权 → /mcp, /auth/google/* → /health.
+ * Hono app: Host/Origin validation → MCP 鉴权 (CF_ACCESS_* / MCP_AUTH_TOKEN) → /mcp, /auth/google/* → /health.
  * Lazy config resolution so the Worker entry can swap in per-request bindings
  * via setEnvSource() before app.fetch runs.
  */

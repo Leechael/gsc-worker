@@ -77,7 +77,7 @@ export function resolveRedirectUri(cfg: Config, requestUrl: string, hostHeader: 
  * Removal takes `account` (email) as a query or form parameter; it may be
  * omitted when exactly one account is stored.
  *
- * Every route sits behind the same MCP_AUTH_MODE check as /mcp (plus the
+ * Every route sits behind the same authentication checks as /mcp (plus the
  * global Host/Origin validation). The pending state is bound to the identity
  * that started the flow, so a callback must come from that same identity.
  * On the Node entry the routes answer 404: Node keeps `npm run auth` +

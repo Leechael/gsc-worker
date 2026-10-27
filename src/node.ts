@@ -25,6 +25,6 @@ const app = buildApp('node');
 serve({ fetch: app.fetch, hostname: cfg.host, port: cfg.port }, (info) => {
   console.log(
     `gsc-mcp-ts listening on http://${cfg.host}:${info.port}/mcp ` +
-    `(auth: ${cfg.auth.rawMode || 'unset'}, scope tier: ${cfg.scopeTier})`,
+    `(auth: ${cfg.auth.modes.join('+')}, tool tier: ${cfg.scopeTier})`,
   );
 });

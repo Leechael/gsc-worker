@@ -19,7 +19,7 @@ Search Console access uses Google OAuth refresh tokens. One deployment can hold 
 - [Running on Node or stdio](#running-on-node-or-stdio)
 - [Client configuration](#client-configuration)
 - [Environment variables](#environment-variables)
-- [Tools and scope tiers](#tools-and-scope-tiers)
+- [Tools and tool tiers](#tools-and-tool-tiers)
 - [Other search engines](#other-search-engines)
 - [Development](#development)
 
@@ -51,7 +51,7 @@ On the **OAuth consent screen**, add the scope `https://www.googleapis.com/auth/
 | `vars.MCP_ALLOWED_HOSTS` | The same hostname |
 | `vars.CF_ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com`, where `<team>` is the team name shown under **Zero Trust → Settings** |
 | `vars.CF_ACCESS_AUD` | The Access application's AUD tag (step 4) |
-| `vars.GSC_SCOPES` | `readonly` (default) or `full` |
+| `vars.TOOL_TIER` | Optional: `read` (default), `write`, or `destructive` |
 
 ### 3. Set secrets and deploy
 
@@ -82,9 +82,9 @@ In Zero Trust, go to **Access → Applications → Add an application → Self-h
 
 Because the application covers the whole hostname, Access also sits in front of `/health`: an unauthenticated monitor gets the Access login redirect, not the Worker's JSON. Add a separate Access application for the path `/health` with a **Bypass** policy if you need public health checks.
 
-On `/mcp` and every `/auth/*` route, the Worker verifies the `Cf-Access-Jwt-Assertion` header (`/health` is not checked): signature against the team JWKS, issuer, audience, and expiry. User tokens map to the email and service tokens to their common name. `CF_ACCESS_ALLOWED_EMAILS` and `CF_ACCESS_ALLOWED_SERVICE_TOKENS` can narrow the Access policy further on the server side.
+On `/mcp` and every `/auth/*` route, the Worker verifies the `Cf-Access-Jwt-Assertion` header (`/health` is not checked): signature against the team JWKS, issuer, audience, and expiry. User tokens map to the email and service tokens to their common name.
 
-Bearer mode (`MCP_AUTH_MODE=bearer` plus the secret `MCP_AUTH_TOKEN`, at least 32 bytes) works without Access. The modes can be combined (`cf-access,bearer`), and then both must pass. `none` is refused on Workers.
+The checks follow what is configured: `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` turn on the Access check, and the secret `MCP_AUTH_TOKEN` (at least 32 bytes) turns on a bearer check, which works without Access. With both set, both must pass. A Worker with neither refuses to serve.
 
 ### 5. Authorize Google
 
@@ -96,7 +96,7 @@ Open `https://<your-host>/auth/google` in a browser and approve the consent scre
 
 | Route | Method | What it does |
 |---|---|---|
-| `/auth/google` | GET | Redirects to Google consent with `access_type=offline`, `prompt=consent select_account`, the scope from `GSC_SCOPES` (plus `analytics.readonly` with `?ga4=1`), `include_granted_scopes=true` so scopes the account already granted are kept, a random `state`, and a PKCE S256 challenge |
+| `/auth/google` | GET | Redirects to Google consent with `access_type=offline`, `prompt=consent select_account`, the scope `TOOL_TIER` needs (plus `analytics.readonly` with `?ga4=1`), `include_granted_scopes=true` so scopes the account already granted are kept, a random `state`, and a PKCE S256 challenge |
 | `/auth/google/callback` | GET | Validates `state`, exchanges the code with the PKCE verifier, and stores the refresh token encrypted. Browsers are then redirected (303) to `/auth/google/status?connected=1`, so a reload does not resubmit the code; JSON clients get the result directly. The token is never displayed |
 | `/auth/google/status` | GET | Shows the default token source, every connected account (email, scope, added time, health), and the redirect URI in use. No secrets |
 | `/auth/google/accounts` | GET | Connected accounts with source, scope, added time and health. No secrets. Admins only (see below) |
@@ -105,11 +105,11 @@ Open `https://<your-host>/auth/google` in a browser and approve the consent scre
 
 Browsers (`Accept: text/html`) get a small HTML page; other clients get JSON (or add `?format=json`).
 
-**Protection.** Every `/auth/*` route goes through the same `MCP_AUTH_MODE` check and `MCP_ALLOWED_HOSTS` allowlist as `/mcp`; nothing under `/auth/` is reachable unauthenticated. With Cloudflare Access, a browser arrives carrying the Access JWT, so the interactive flow just works. The pending `state` is bound to the identity that started the flow, so the callback must come from the same Access user (or the same bearer token). In `cf-access,bearer` mode it is bound to both identities. `revoke` is POST-only and rejects cross-site requests (`Origin` / `Sec-Fetch-Site`).
+**Protection.** Every `/auth/*` route goes through the same authentication checks and `MCP_ALLOWED_HOSTS` allowlist as `/mcp`; nothing under `/auth/` is reachable unauthenticated. With Cloudflare Access, a browser arrives carrying the Access JWT, so the interactive flow just works. The pending `state` is bound to the identity that started the flow, so the callback must come from the same Access user (or the same bearer token). With both Access and a bearer token configured it is bound to both identities. `revoke` is POST-only and rejects cross-site requests (`Origin` / `Sec-Fetch-Site`).
 
-**Who may connect and disconnect.** Any identity that passes `MCP_AUTH_MODE` may read `/auth/google/status`. Starting the flow, completing the callback, listing accounts at `/auth/google/accounts`, and removing an account are more restricted:
+**Who may connect and disconnect.** Any identity that passes the authentication checks may read `/auth/google/status`. Starting the flow, completing the callback, listing accounts at `/auth/google/accounts`, and removing an account are more restricted:
 
-- With `GOOGLE_AUTH_ADMINS` set, only the listed identities may do them. Entries are Access user emails, Access service-token common names (`<client-id>.access`), or `static-bearer` for the `MCP_AUTH_TOKEN` holder; matching is case-insensitive. In combined modes one listed identity is enough.
+- With `GOOGLE_AUTH_ADMINS` set, only the listed identities may do them. Entries are Access user emails, Access service-token common names (`<client-id>.access`), or `static-bearer` for the `MCP_AUTH_TOKEN` holder; matching is case-insensitive. With both checks configured, one listed identity is enough.
 - Without it, Access users and the bearer token holder may, but Access service tokens may not. That way a token issued to a CI job or agent cannot swap the deployment's Google account.
 
 **State and PKCE.** `state` and the PKCE verifier are 32 random bytes each. The verifier never leaves the Worker: it is stored encrypted in KV under the state key with a 10-minute TTL, and it is deleted when the callback uses it. A callback from a different identity is refused without consuming the pending request, so it cannot cancel someone else's flow. KV has no atomic read-and-delete, so two callbacks racing on the same `state` could both read it; Google authorization codes are single-use, so at most one of them gets a token.
@@ -127,11 +127,11 @@ Ciphertexts use a fresh 96-bit IV and are bound to their key name with AES-GCM a
 
 **Accounts and routing.** Every KV account plus `GOOGLE_REFRESH_TOKEN` from the environment (account `env`, if set) is available. Each account has its own cached access token. When several accounts are connected, the server lists each account's properties (`sites.list`, cached for 5 minutes and dropped when accounts change) and sends a call about a property to the account with the highest permission on it (`siteOwner` > `siteFullUser` > `siteRestrictedUser`). If that account gets 403, the next account that lists the property is tried. Calls about a property no account lists use the default account (the first KV account, else `env`). `list_properties` merges all accounts and shows which accounts can access each property. `add_site` has no property to route by, so with several accounts it needs its `account` argument (an email); without it the tool answers with the list of accounts. With a single account nothing changes: no extra `sites.list` calls are made.
 
-**Token precedence.** The default account is the first KV account; `GOOGLE_REFRESH_TOKEN` is the default only when KV holds nothing (backward compatible). A KV token that cannot be decrypted is reported as an error; the Worker does not silently fall back to the env token. `/health` (`google_token_source`, and `google_accounts` with counts only, since `/health` is unauthenticated), `/auth/google/status`, and `get_capabilities` report the sources and per-account health. `get_capabilities` also warns when the stored grant does not cover `GSC_SCOPES`, or when a refresh token is present without the client credentials. A stored token issued to a different `GOOGLE_CLIENT_ID` than the configured one is refused with an error asking you to re-authorize.
+**Token precedence.** The default account is the first KV account; `GOOGLE_REFRESH_TOKEN` is the default only when KV holds nothing (backward compatible). A KV token that cannot be decrypted is reported as an error; the Worker does not silently fall back to the env token. `/health` (`google_token_source`, and `google_accounts` with counts only, since `/health` is unauthenticated), `/auth/google/status`, and `get_capabilities` report the sources and per-account health. `get_capabilities` also warns when the stored grant does not cover the scope `TOOL_TIER` needs, or when a refresh token is present without the client credentials. A stored token issued to a different `GOOGLE_CLIENT_ID` than the configured one is refused with an error asking you to re-authorize.
 
 **Propagation.** Workers KV is eventually consistent: a new or deleted token can take up to about 60 seconds to be visible in other Cloudflare locations. Each isolate also trusts the stored token's metadata for up to 30 seconds before checking KV again. So after re-authorizing or disconnecting, requests served elsewhere may use the previous token for up to about a minute and a half. The isolate that handled the change switches immediately. If Google rejects a cached access token with 401, the server fetches a new one and retries the call once.
 
-**Re-authorizing.** Open `/auth/google` again and sign in as the same account. The new token replaces that account's stored token; other accounts are untouched. When Google answers `invalid_grant` (token revoked, expired, or unused for 6 months), tool errors say to re-open `/auth/google`. After changing `GSC_SCOPES`, re-authorize so the stored grant covers the new scope; the status page shows `covers_required_scope`. To add Google Analytics to an account, open `/auth/google?ga4=1` (the status page links to it). Because of `include_granted_scopes`, a later plain `/auth/google` keeps Analytics.
+**Re-authorizing.** Open `/auth/google` again and sign in as the same account. The new token replaces that account's stored token; other accounts are untouched. When Google answers `invalid_grant` (token revoked, expired, or unused for 6 months), tool errors say to re-open `/auth/google`. After raising `TOOL_TIER` to `write` or `destructive`, re-authorize so the stored grant covers the new scope; the status page shows `covers_required_scope`. To add Google Analytics to an account, open `/auth/google?ga4=1` (the status page links to it). Because of `include_granted_scopes`, a later plain `/auth/google` keeps Analytics.
 
 **Redirect URI.** By default it is `https://<request host>/auth/google/callback`, and the host must be listed in `MCP_ALLOWED_HOSTS`. Set `GOOGLE_REDIRECT_URI` to pin it explicitly; the callback is then only accepted on that URI's host. Either way it must exactly match an authorized redirect URI on the Google client.
 
@@ -157,7 +157,7 @@ npm run auth -- --scopes readonly --client-secrets ~/Downloads/client_secret_xxx
 export GSC_CREDENTIALS_FILE=$PWD/gsc-credentials.json
 ```
 
-- HTTP: `MCP_AUTH_MODE=bearer MCP_AUTH_TOKEN=$(openssl rand -hex 32) npm run dev` serves `http://127.0.0.1:3001/mcp`. Binding a non-loopback `MCP_HOST` requires `MCP_ALLOWED_HOSTS`. `MCP_AUTH_MODE=none` is only allowed on loopback.
+- HTTP: `MCP_AUTH_TOKEN=$(openssl rand -hex 32) npm run dev` serves `http://127.0.0.1:3001/mcp`. Binding a non-loopback `MCP_HOST` requires `MCP_ALLOWED_HOSTS` and an authentication check. Without `MCP_AUTH_TOKEN` or `CF_ACCESS_*`, the server runs unauthenticated, which is only allowed on loopback.
 - stdio: `npm run dev:stdio`. There is no HTTP authentication, and credentials come from the environment or `GSC_CREDENTIALS_FILE`.
 
 Explicit `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` env vars win over the file.
@@ -220,13 +220,9 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 
 | Name | Entry | Kind | Default | Purpose |
 |---|---|---|---|---|
-| `MCP_AUTH_MODE` | HTTP | var | (required) | `cf-access`, `bearer`, `none` (loopback Node only); comma-combine for "all must pass". `oauth` is not implemented |
-| `MCP_AUTH_TOKEN` | HTTP | secret | | Static token for `bearer` (≥ 32 bytes) |
-| `MCP_BEARER_HEADER` | HTTP | var | `authorization` | Read the raw bearer token from another header, e.g. `x-api-key` |
-| `CF_ACCESS_TEAM_DOMAIN` | HTTP | var | | `https://<team>.cloudflareaccess.com` (required for `cf-access`) |
-| `CF_ACCESS_AUD` | HTTP | var | | Access application AUD tag(s), comma-separated (required for `cf-access`) |
-| `CF_ACCESS_ALLOWED_EMAILS` | HTTP | var | | Optional server-side email allowlist |
-| `CF_ACCESS_ALLOWED_SERVICE_TOKENS` | HTTP | var | | Optional service-token common-name allowlist |
+| `MCP_AUTH_TOKEN` | HTTP | secret | | Static bearer token (≥ 32 bytes); setting it turns on the bearer check |
+| `CF_ACCESS_TEAM_DOMAIN` | HTTP | var | | `https://<team>.cloudflareaccess.com` (set with `CF_ACCESS_AUD` to turn on the Access check) |
+| `CF_ACCESS_AUD` | HTTP | var | | Access application AUD tag(s), comma-separated |
 | `MCP_ALLOWED_HOSTS` | HTTP | var | | Host header allowlist (DNS-rebinding protection). Required on Workers and for non-loopback Node; also gates the derived OAuth redirect URI |
 | `MCP_ALLOWED_ORIGINS` | HTTP | var | Workers: `MCP_ALLOWED_HOSTS` | Origin header allowlist |
 | `MCP_HOST` / `MCP_PORT` (`PORT`) | Node | var | `127.0.0.1` / `3001` | Bind address and port |
@@ -237,31 +233,28 @@ On Workers, set plain values under `vars` in `wrangler.jsonc` and sensitive valu
 | `GOOGLE_REDIRECT_URI` | Workers | var | derived from host | Explicit `https://<host>/auth/google/callback` |
 | `GOOGLE_AUTH_ADMINS` | Workers | var | | Comma-separated identities allowed to connect/disconnect Google (emails, service-token common names, `static-bearer`). Unset: everyone except Access service tokens |
 | `GSC_CREDENTIALS_FILE` | Node, stdio | var | | JSON written by `npm run auth` (or Google's `token.json`) |
-| `GSC_SCOPES` | all | var | `readonly` | `readonly` or `full` (`webmasters`) |
-| `GSC_ALLOW_DESTRUCTIVE` | all | var | `false` | With `GSC_SCOPES=full`, enables add/delete tools |
+| `TOOL_TIER` | all | var | `read` | `read`, `write`, or `destructive` ([tiers](#tools-and-tool-tiers)); `write` and up request the full Google `webmasters` scope |
 | `GSC_DATA_STATE` | all | var | `all` | `all` (matches the GSC UI) or `final` |
-| `GSC_SKIP_OAUTH` | all | var | | Accepted for compatibility with mcp-gsc and ignored (no service accounts) |
 | `BING_API_KEY` | all | secret | | Bing Webmaster Tools API key; enables the `bing_*` tools ([details](#bing-webmaster-tools)) |
 | `INDEXNOW_KEY` | all | secret | | IndexNow key; enables the `indexnow_*` tools ([details](#indexnow)) |
 | `INDEXNOW_KEY_LOCATION` | all | var | `https://<host>/<key>.txt` | Key file location: an absolute URL, or a path such as `/keys/indexnow.txt` used on every host |
 | `INDEXNOW_HOSTS` | all | var | | Hosts whose key file `indexnow_check_key_file` may fetch, comma-separated (e.g. `example.com,www.example.com`); the host of an absolute `INDEXNOW_KEY_LOCATION` is always allowed |
 | `YANDEX_OAUTH_TOKEN` | all | secret | | Yandex OAuth token; enables the `yandex_*` tools ([details](#yandex-webmaster)) |
-| `SEZNAM_API_KEYS` | all | secret | | JSON object mapping each site to its Seznam API key; enables the `seznam_*` tools ([details](#seznam-webmaster)) |
-| `SEZNAM_API_KEY` | all | secret | | A single Seznam API key (one site, or the fallback when no `SEZNAM_API_KEYS` entry matches) |
+| `SEZNAM_API_KEY` | all | secret | | One Seznam API key, or a JSON object mapping each site to its key; enables the `seznam_*` tools ([details](#seznam-webmaster)) |
 
 Script-only: `MCP_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
-`GET /health` is not checked by `MCP_AUTH_MODE` (but Cloudflare Access still guards it if the Access application covers the whole hostname; see step 4 of the deploy guide). It returns `ok`, `version`, `google_token_configured`, `google_token_available`, and `google_token_source` (`kv` | `env` | `none`), never secret values or error details.
+`GET /health` is not checked by the authentication checks (but Cloudflare Access still guards it if the Access application covers the whole hostname; see step 4 of the deploy guide). It returns `ok`, `version`, `google_token_configured`, `google_token_available`, and `google_token_source` (`kv` | `env` | `none`), never secret values or error details.
 
-## Tools and scope tiers
+## Tools and tool tiers
 
 All 21 tools are always registered. Tools above the current tier return upgrade guidance flagged `isError: true` instead of calling Google.
 
 | Tier | Enabled by | Tools |
 |---|---|---|
-| read | default (`GSC_SCOPES=readonly`) | `get_capabilities`, `get_creator_info`, `reauthenticate`, `list_properties`, `get_site_details`, `get_search_analytics`, `get_performance_overview`, `get_advanced_search_analytics`, `compare_search_periods`, `get_search_by_page_query`, `inspect_url_enhanced`, `batch_url_inspection`, `check_indexing_issues`, `get_sitemaps`, `list_sitemaps_enhanced`, `get_sitemap_details`, `manage_sitemaps` (`list`, `details`) |
-| write | `GSC_SCOPES=full` | `submit_sitemap`, `manage_sitemaps` (`submit`) |
-| destructive | `GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
+| read | default (`TOOL_TIER=read`) | `get_capabilities`, `get_creator_info`, `reauthenticate`, `list_properties`, `get_site_details`, `get_search_analytics`, `get_performance_overview`, `get_advanced_search_analytics`, `compare_search_periods`, `get_search_by_page_query`, `inspect_url_enhanced`, `batch_url_inspection`, `check_indexing_issues`, `get_sitemaps`, `list_sitemaps_enhanced`, `get_sitemap_details`, `manage_sitemaps` (`list`, `details`) |
+| write | `TOOL_TIER=write` | `submit_sitemap`, `manage_sitemaps` (`submit`) |
+| destructive | `TOOL_TIER=destructive` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
 
 Start with `get_capabilities`: it reports the tier, auth status, token source, the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API), and the Google Analytics API vs UI boundary.
 
@@ -297,7 +290,7 @@ Start with `ga4_get_account_summaries` for property IDs (`properties/123` or `12
 
 ## Other search engines
 
-Bing, IndexNow, Yandex, and Seznam are opt-in. Their tools are registered only when the engine's secret is set, and they use the same scope tiers as the Google tools: read tools always run, submit tools need `GSC_SCOPES=full`, and remove tools also need `GSC_ALLOW_DESTRUCTIVE=true`. Note that `GSC_SCOPES=full` also switches the Google grant to the full `webmasters` scope, so re-authorize Google after changing it. `get_capabilities` lists each engine as enabled or not configured, without showing secret values. Google Analytics 4 needs no key (see above): it uses the Google OAuth grant.
+Bing, IndexNow, Yandex, and Seznam are opt-in. Their tools are registered only when the engine's secret is set, and they use the same tool tiers as the Google tools: read tools always run, submit tools need `TOOL_TIER=write`, and remove tools need `TOOL_TIER=destructive`. Their keys do not depend on the Google grant; only the Google write tools need you to re-authorize Google after raising the tier. `get_capabilities` lists each engine as enabled or not configured, without showing secret values. Google Analytics 4 needs no key (see above): it uses the Google OAuth grant.
 
 ### Bing Webmaster Tools
 
@@ -372,8 +365,8 @@ The token is valid for about **6 months**. When it expires (or is revoked), the 
 | Tier | Tools |
 |---|---|
 | read | `yandex_list_hosts`, `yandex_get_host`, `yandex_get_host_summary`, `yandex_get_popular_queries`, `yandex_get_queries_history`, `yandex_get_query_history`, `yandex_get_indexing_history`, `yandex_get_indexing_samples`, `yandex_get_in_search_history`, `yandex_get_in_search_samples`, `yandex_get_search_events_history`, `yandex_get_search_events_samples`, `yandex_get_diagnostics`, `yandex_get_sqi_history`, `yandex_get_broken_internal_links`, `yandex_get_broken_internal_links_history`, `yandex_get_external_links`, `yandex_get_external_links_history`, `yandex_list_sitemaps`, `yandex_get_sitemap`, `yandex_list_user_sitemaps`, `yandex_get_recrawl_quota`, `yandex_list_recrawl_tasks`, `yandex_get_recrawl_task` |
-| write (`GSC_SCOPES=full`) | `yandex_add_sitemap`, `yandex_recrawl_url` |
-| destructive (`GSC_SCOPES=full` + `GSC_ALLOW_DESTRUCTIVE=true`) | `yandex_delete_sitemap` |
+| write (`TOOL_TIER=write`) | `yandex_add_sitemap`, `yandex_recrawl_url` |
+| destructive (`TOOL_TIER=destructive`) | `yandex_delete_sitemap` |
 
 **Limits.** Recrawl has a per-site daily quota (`yandex_get_recrawl_quota`). When Yandex answers 429 (`QUOTA_EXCEEDED` or `TOO_MANY_REQUESTS_ERROR`), the tool reports the daily quota and the time the new quota starts; 429 is not retried, 5xx is retried twice. Query statistics come from the TOP-3000 queries; the sample endpoints return at most 50,000 URLs. Dates (`date_from`/`date_to`) are passed through as given; `YYYY-MM-DD` is the safest form. Response timestamps are returned as ISO 8601 with Yandex's original offset.
 
@@ -381,24 +374,24 @@ Not covered yet: adding or deleting sites, ownership verification, important URL
 
 ### Seznam Webmaster
 
-Setting `SEZNAM_API_KEYS` (or `SEZNAM_API_KEY`) adds 6 `seznam_*` tools for the [Seznam Webmaster](https://reporter.seznam.cz/wm/) API. Seznam publishes the API as a Swagger document at <https://reporter.seznam.cz/wm-api/swagger.json> (interactive: <https://reporter.seznam.cz/wm-api/ui/>). Seznam Webmaster is in beta: it reports page counts and per-URL details, and accepts reindex requests. It has **no search query or traffic data**.
+Setting `SEZNAM_API_KEY` adds 6 `seznam_*` tools for the [Seznam Webmaster](https://reporter.seznam.cz/wm/) API. Seznam publishes the API as a Swagger document at <https://reporter.seznam.cz/wm-api/swagger.json> (interactive: <https://reporter.seznam.cz/wm-api/ui/>). Seznam Webmaster is in beta: it reports page counts and per-URL details, and accepts reindex requests. It has **no search query or traffic data**.
 
-**Keys are per site.** The API has no site parameter; the key selects the site. Generate one per site in Seznam Webmaster: sign in at <https://reporter.seznam.cz/wm/>, open the verified site, and create an access key in its **API** section. A key with read rights is enough for everything except `seznam_reindex_url`, which needs write rights. Then store the keys as one JSON object:
+**Keys are per site.** The API has no site parameter; the key selects the site. Generate one per site in Seznam Webmaster: sign in at <https://reporter.seznam.cz/wm/>, open the verified site, and create an access key in its **API** section. A key with read rights is enough for everything except `seznam_reindex_url`, which needs write rights. Store the key itself for one site, or a JSON object for several:
 
 ```bash
 # Workers
-echo '{"example.cz":"<key>","https://shop.example.cz":"<key>"}' | npx wrangler secret put SEZNAM_API_KEYS
-npx wrangler secret put SEZNAM_API_KEY          # alternative for a single site
+npx wrangler secret put SEZNAM_API_KEY          # one site: paste the key
+echo '{"example.cz":"<key>","https://shop.example.cz":"<key>"}' | npx wrangler secret put SEZNAM_API_KEY
 # Node / stdio
-export SEZNAM_API_KEYS='{"example.cz":"<key>"}'
+export SEZNAM_API_KEY='{"example.cz":"<key>"}'
 ```
 
-Site names are host names, optionally with the protocol (Seznam treats `http` and `https` as different sites); `www.` is significant. Tools take an optional `site`; it can be omitted when one site is configured, and the page tools also pick the key from the URL's host. `SEZNAM_API_KEY` appears as the site `default` and is used when no `SEZNAM_API_KEYS` entry matches. Invalid `SEZNAM_API_KEYS` entries are ignored; `get_capabilities` and `seznam_list_sites` list the configured site names (never the keys) and warn about ignored entries. If no usable key is left, Seznam shows as not configured. Keys travel in the `key` query parameter, as the API requires; they are scrubbed from every error message.
+Site names are host names, optionally with the protocol (Seznam treats `http` and `https` as different sites); `www.` is significant. Tools take an optional `site`; it can be omitted when one site is configured, and the page tools also pick the key from the URL's host. A single key appears as the site `default`. Invalid entries in the JSON object are ignored; `get_capabilities` and `seznam_list_sites` list the configured site names (never the keys) and warn about ignored entries. If no usable key is left, Seznam shows as not configured. Keys travel in the `key` query parameter, as the API requires; they are scrubbed from every error message.
 
 | Tier | Tools |
 |---|---|
 | read | `seznam_list_sites`, `seznam_get_site`, `seznam_get_documents`, `seznam_get_documents_history`, `seznam_get_document` |
-| write (`GSC_SCOPES=full`, key with write rights) | `seznam_reindex_url` |
+| write (`TOOL_TIER=write`, key with write rights) | `seznam_reindex_url` |
 
 There are no destructive Seznam tools; the API has no delete operations.
 

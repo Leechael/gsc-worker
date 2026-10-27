@@ -81,14 +81,6 @@ export function buildCfAccessAuthenticator(
       return deny(401, 'token carries no identity (no email/common_name claim)');
     }
 
-    // Optional server-side second allowlist (plan §6.5.3).
-    if (email && cfg.allowedEmails.length > 0 && !cfg.allowedEmails.includes(email)) {
-      return deny(403, `email '${email}' is not in CF_ACCESS_ALLOWED_EMAILS`);
-    }
-    if (commonName && cfg.allowedServiceTokens.length > 0 && !cfg.allowedServiceTokens.includes(commonName)) {
-      return deny(403, `service token '${commonName}' is not in CF_ACCESS_ALLOWED_SERVICE_TOKENS`);
-    }
-
     const exp = payload.exp;
     if (typeof exp !== 'number') {
       // Fail closed: a token without exp would otherwise get a synthesized

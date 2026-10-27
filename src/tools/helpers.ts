@@ -40,25 +40,15 @@ export function jsonError(value: unknown): { isError: true; content: { type: 'te
 export function tierGateMessage(tier: ScopeTier, tool: string, required: 'write' | 'destructive'): string | null {
   const order: ScopeTier[] = ['read', 'write', 'destructive'];
   if (order.indexOf(tier) >= order.indexOf(required)) return null;
-  const workerHint =
-    '  (Cloudflare Workers with the GSC_TOKENS KV binding: after step 2, open /auth/google on the deployment instead of steps 1 and 3.)';
-  if (required === 'destructive') {
-    return (
-      `Safety: ${tool} modifies your GSC account and is disabled at the current scope tier (${tier}).\n` +
-      'To enable it:\n' +
-      '  1. Re-authorize with full scope: npm run auth -- --scopes full\n' +
-      '  2. Set GSC_SCOPES=full and GSC_ALLOW_DESTRUCTIVE=true in the server environment\n' +
-      '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.\n' +
-      workerHint
-    );
-  }
+  const what = required === 'destructive'
+    ? `${tool} modifies your GSC account and is disabled at the current tool tier (${tier}).`
+    : `${tool} requires the 'webmasters' scope (current tool tier: ${tier}).`;
   return (
-    `Safety: ${tool} requires the 'webmasters' scope (current tier: ${tier}).\n` +
+    `Safety: ${what}\n` +
     'To enable it:\n' +
-    '  1. Re-authorize: npm run auth -- --scopes full\n' +
-    '  2. Set GSC_SCOPES=full in the server environment\n' +
-    '  3. Update GOOGLE_REFRESH_TOKEN and restart the server.\n' +
-    workerHint
+    `  1. Set TOOL_TIER=${required} in the server environment and restart (or redeploy).\n` +
+    '  2. Re-authorize Google with the full webmasters scope: open /auth/google on Workers,\n' +
+    '     or run npm run auth -- --scopes full and update GOOGLE_REFRESH_TOKEN on Node.'
   );
 }
 
@@ -67,7 +57,7 @@ type ToolErrorResult = { isError: true; content: { type: 'text'; text: string }[
 /**
  * Write-tier check against the scope Google granted to the account that
  * owns `siteUrl` (or `account` when the caller already chose one). Unknown
- * granted scope falls back to GSC_SCOPES. Returns a structured error with
+ * granted scope falls back to the scope TOOL_TIER requests. Returns a structured error with
  * a `resolution` field instead of passing Google's 403 through.
  */
 export async function grantedWriteGate(
@@ -119,7 +109,7 @@ export async function accountCannotWriteResult(
     granted_scope: granted ?? 'unknown',
     required_scope: GOOGLE_SCOPE_FULL,
     resolution:
-      `Re-authorize ${name} at /auth/google with GSC_SCOPES=full so Google grants the ` +
+      `Re-authorize ${name} at /auth/google (with TOOL_TIER=write or destructive) so Google grants the ` +
       'webmasters (non-readonly) scope. Write tools use the scope Google actually granted ' +
       'to that account.',
   });
