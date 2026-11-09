@@ -20,12 +20,13 @@ interface SearchAnalyticsRow {
 
 interface SearchAnalyticsMetadata {
   firstIncompleteDate?: string;
-  firstIncompleteHour?: number;
+  firstIncompleteHour?: string;
 }
 
 interface SearchAnalyticsResponse {
   rows?: SearchAnalyticsRow[];
   metadata?: SearchAnalyticsMetadata;
+  responseAggregationType?: string;
 }
 
 /** Passthrough of firstIncompleteDate/Hour metadata (Pacific Time), when present. */
@@ -37,6 +38,17 @@ function metadataResult(resp: SearchAnalyticsResponse): Record<string, unknown> 
   if (m.firstIncompleteHour !== undefined) out.first_incomplete_hour = m.firstIncompleteHour;
   if (Object.keys(out).length === 0) return null;
   out.note = 'first_incomplete_date and first_incomplete_hour are in Pacific Time.';
+  return out;
+}
+
+/** Copy API completeness fields onto a tool payload only when the API sent them. */
+function analyticsExtras(resp: SearchAnalyticsResponse): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const metadata = metadataResult(resp);
+  if (metadata) out.metadata = metadata;
+  if (typeof resp.responseAggregationType === 'string' && resp.responseAggregationType !== '') {
+    out.response_aggregation_type = resp.responseAggregationType;
+  }
   return out;
 }
 
@@ -106,7 +118,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
         );
 
         const rows = data.rows ?? [];
-        const metadata = metadataResult(data);
+        const extras = analyticsExtras(data);
         if (rows.length === 0) {
           return jsonResult({
             site_url,
@@ -114,7 +126,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
             dimensions: dimensionList,
             row_count: 0,
             rows: [],
-            ...(metadata ? { metadata } : {}),
+            ...extras,
             note: `No search analytics data found for ${site_url} in the selected period.`,
           });
         }
@@ -123,7 +135,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
           site_url,
           date_range: { start, end, days },
           dimensions: dimensionList,
-          ...(metadata ? { metadata } : {}),
+          ...extras,
           row_count: rows.length,
           rows: rows.map((row) => {
             const entry: Record<string, unknown> = {};

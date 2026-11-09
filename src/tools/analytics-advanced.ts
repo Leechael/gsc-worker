@@ -11,7 +11,7 @@ import {
   type Dimension,
 } from '../lib/enums.js';
 import { isValidISODate, lastNDays } from '../lib/dates.js';
-import { errorText, errorResult, jsonError, jsonResult, textResult } from './helpers.js';
+import { errorText, errorResult, jsonError, jsonResult } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
 
@@ -49,12 +49,13 @@ interface SearchAnalyticsRow {
 
 interface SearchAnalyticsMetadata {
   firstIncompleteDate?: string;
-  firstIncompleteHour?: number;
+  firstIncompleteHour?: string;
 }
 
 interface SearchAnalyticsResponse {
   rows?: SearchAnalyticsRow[];
   metadata?: SearchAnalyticsMetadata;
+  responseAggregationType?: string;
 }
 
 interface ActiveFilter {
@@ -92,6 +93,21 @@ function buildMetadata(metadata: SearchAnalyticsMetadata | undefined): Record<st
   if (Object.keys(out).length === 0) return null;
   out.note = INCOMPLETE_NOTE;
   return out;
+}
+
+/** Copy completeness fields from an API response; omit keys the API did not send. */
+function applyAnalyticsExtras(
+  result: Record<string, unknown>,
+  resp: SearchAnalyticsResponse | undefined,
+  keys: { metadata?: string; aggregation?: string } = {},
+): void {
+  if (!resp) return;
+  const metadata = buildMetadata(resp.metadata);
+  if (metadata) result[keys.metadata ?? 'metadata'] = metadata;
+  const aggregation = resp.responseAggregationType;
+  if (typeof aggregation === 'string' && aggregation !== '') {
+    result[keys.aggregation ?? 'response_aggregation_type'] = aggregation;
+  }
 }
 
 /** Parse + validate a filters JSON array; `filters` takes priority over the single-filter triple. */
@@ -197,31 +213,33 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         });
 
         const totalsRow = totalResp.rows?.[0];
-        if (!totalsRow) {
-          return textResult(`No performance data available for ${site_url} in the last ${days} days.`);
-        }
-
         const trendRows = [...(trendResp.rows ?? [])].sort((a, b) => (a.keys?.[0] ?? '').localeCompare(b.keys?.[0] ?? ''));
+        const dailyTrend = trendRows.map((row) => ({
+          date: row.keys?.[0] ?? null,
+          clicks: row.clicks ?? 0,
+          impressions: row.impressions ?? 0,
+          ctr: Number((row.ctr ?? 0).toFixed(4)),
+          position: Number((row.position ?? 0).toFixed(1)),
+        }));
 
         const result: Record<string, unknown> = {
           site_url,
           date_range: { start, end, days },
-          totals: {
-            clicks: totalsRow.clicks ?? 0,
-            impressions: totalsRow.impressions ?? 0,
-            ctr: Number((totalsRow.ctr ?? 0).toFixed(4)),
-            position: Number((totalsRow.position ?? 0).toFixed(1)),
-          },
-          daily_trend: trendRows.map((row) => ({
-            date: row.keys?.[0] ?? null,
-            clicks: row.clicks ?? 0,
-            impressions: row.impressions ?? 0,
-            ctr: Number((row.ctr ?? 0).toFixed(4)),
-            position: Number((row.position ?? 0).toFixed(1)),
-          })),
+          totals: totalsRow
+            ? {
+                clicks: totalsRow.clicks ?? 0,
+                impressions: totalsRow.impressions ?? 0,
+                ctr: Number((totalsRow.ctr ?? 0).toFixed(4)),
+                position: Number((totalsRow.position ?? 0).toFixed(1)),
+              }
+            : null,
+          daily_trend: dailyTrend,
         };
-        const metadata = buildMetadata(trendResp.metadata);
-        if (metadata) result.metadata = metadata;
+        if (!totalsRow) {
+          result.note = `No performance data available for ${site_url} in the last ${days} days.`;
+        }
+        // Completeness markers come from the date-grouped trend query.
+        applyAnalyticsExtras(result, trendResp);
         return jsonResult(result);
       } catch (e) {
         return errorResult(errorText('retrieving performance overview', e, site_url));
@@ -235,9 +253,12 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
       annotations: toolAnnotations(GSC_TOOLS, 'get_advanced_search_analytics'),
       title: 'Advanced search analytics',
       description:
-        'Get advanced search analytics data with sorting, filtering, hourly dataState, and automatic ' +
-        'pagination (up to 25000 rows across pages). When grouping by the "hour" dimension, pass ' +
-        'data_state="hourly_all" and keep the date range within 10 days.',
+        'Get advanced search analytics data with sorting, filtering, hourly dataState, and automatic pagination. ' +
+        `Each API request returns at most ${API_PAGE_MAX} rows (row_limit, default 1000). ` +
+        `Use max_rows to collect more across pages (default: same as row_limit; max 100000). ` +
+        'pagination.has_more is true when the last fetched page was full, meaning more rows may exist — it is not a guarantee. ' +
+        'When grouping by the "hour" dimension, pass data_state="hourly_all" and keep the date range within 10 days. ' +
+        `Filter operators include includingRegex and excludingRegex (RE2); each filter expression is at most ${FILTER_EXPRESSION_MAX} characters.`,
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
@@ -248,7 +269,10 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         end_date: z.string().nullish()
           .describe('End date in YYYY-MM-DD format (defaults to today, Pacific Time).'),
         dimensions: nullMeansDefault(z.string(), 'query')
-          .describe('Dimensions to group by, comma-separated (e.g., "query,page,device").'),
+          .describe(
+            'Dimensions to group by, comma-separated: date, query, page, country, device, searchAppearance, hour. ' +
+              'hour requires data_state="hourly_all" and a date range of at most 10 days.',
+          ),
         search_type: nullMeansDefault(z.string(), 'web').describe(
           'Type of search results: web, image, video, news, discover, or googleNews (case-insensitive, default web).',
         ),
@@ -269,11 +293,20 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           'Sort direction. For position, ascending puts the best (lowest) average position first.',
         ),
         filter_dimension: z.string().nullish()
-          .describe('Single filter dimension. Use "filters" instead for multiple filters.'),
-        filter_operator: nullMeansDefault(z.string(), 'contains').describe('Single filter operator.'),
-        filter_expression: z.string().nullish().describe('Single filter expression value.'),
+          .describe(
+            `Single filter dimension (${FILTER_DIMENSIONS.join(', ')}). Use "filters" instead for multiple filters.`,
+          ),
+        filter_operator: nullMeansDefault(z.string(), 'contains').describe(
+          `Filter operator: ${FILTER_OPERATORS.join(', ')} (default contains). ` +
+            `Regex operators use RE2. Each expression is at most ${FILTER_EXPRESSION_MAX} characters.`,
+        ),
+        filter_expression: z.string().nullish().describe(
+          `Single filter expression value (max ${FILTER_EXPRESSION_MAX} characters).`,
+        ),
         filters: z.string().nullish().describe(
           'JSON array of filter objects with dimension/operator/expression keys, ANDed together. ' +
+          `Operators: ${FILTER_OPERATORS.join(', ')}. Regex operators use RE2. ` +
+          `Each expression is at most ${FILTER_EXPRESSION_MAX} characters. ` +
           'Overrides filter_dimension/filter_operator/filter_expression when provided.',
         ),
         data_state: z.string().nullish().describe(
@@ -409,13 +442,13 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         let lastPageFull = false;
         let cursor = start_row;
         let remaining = budget;
-        let lastMetadata: SearchAnalyticsMetadata | undefined;
+        let lastResp: SearchAnalyticsResponse | undefined;
 
         while (remaining > 0) {
           const pageSize = Math.min(row_limit, remaining, API_PAGE_MAX);
           const resp = await querySearchAnalytics(svc, site_url, { ...baseBody, startRow: cursor, rowLimit: pageSize });
           pagesFetched += 1;
-          lastMetadata = resp.metadata;
+          lastResp = resp;
           const rows = resp.rows ?? [];
           collected.push(...rows);
           remaining -= rows.length;
@@ -443,8 +476,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           };
           const sortNote = sortLimitationNote(sort_by, sort_direction);
           if (sortNote) noData.sort_note = sortNote;
-          const metadata = buildMetadata(lastMetadata);
-          if (metadata) noData.metadata = metadata;
+          applyAnalyticsExtras(noData, lastResp);
           return jsonResult(noData);
         }
 
@@ -470,8 +502,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         };
         const sortNote = sortLimitationNote(sort_by, sort_direction);
         if (sortNote) result.sort_note = sortNote;
-        const metadata = buildMetadata(lastMetadata);
-        if (metadata) result.metadata = metadata;
+        applyAnalyticsExtras(result, lastResp);
         return jsonResult(result);
       } catch (e) {
         return errorResult(errorText('retrieving advanced search analytics', e, site_url));
@@ -555,7 +586,25 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const period1Rows = period1Resp.rows ?? [];
         const period2Rows = period2Resp.rows ?? [];
         if (period1Rows.length === 0 && period2Rows.length === 0) {
-          return textResult(`No data found for either period for ${site_url}.`);
+          const empty: Record<string, unknown> = {
+            site_url,
+            period1: { start: period1_start, end: period1_end },
+            period2: { start: period2_start, end: period2_end },
+            dimensions: dimensionList,
+            total_items: 0,
+            showing: 0,
+            comparison: [],
+            note: `No data found for either period for ${site_url}.`,
+          };
+          applyAnalyticsExtras(empty, period1Resp, {
+            metadata: 'metadata_period1',
+            aggregation: 'response_aggregation_type_period1',
+          });
+          applyAnalyticsExtras(empty, period2Resp, {
+            metadata: 'metadata_period2',
+            aggregation: 'response_aggregation_type_period2',
+          });
+          return jsonResult(empty);
         }
 
         // keys are matched across periods as tuples (JSON-serialised to avoid collisions).
@@ -627,10 +676,14 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           comparison: serialisable,
         };
         // Per-period incompleteness markers are kept separate (review P2-6).
-        const meta1 = buildMetadata(period1Resp.metadata);
-        const meta2 = buildMetadata(period2Resp.metadata);
-        if (meta1) result.metadata_period1 = meta1;
-        if (meta2) result.metadata_period2 = meta2;
+        applyAnalyticsExtras(result, period1Resp, {
+          metadata: 'metadata_period1',
+          aggregation: 'response_aggregation_type_period1',
+        });
+        applyAnalyticsExtras(result, period2Resp, {
+          metadata: 'metadata_period2',
+          aggregation: 'response_aggregation_type_period2',
+        });
         return jsonResult(result);
       } catch (e) {
         return errorResult(errorText('comparing search periods', e, site_url));
@@ -677,10 +730,6 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         });
 
         const rows = resp.rows ?? [];
-        if (rows.length === 0) {
-          return textResult(`No search data found for page ${page_url} in the last ${days} days.`);
-        }
-
         const mapped = mapRows(rows, ['query']);
         const totalClicks = mapped.reduce((sum, r) => sum + (r.clicks as number), 0);
         const totalImpressions = mapped.reduce((sum, r) => sum + (r.impressions as number), 0);
@@ -697,8 +746,10 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           row_count: mapped.length,
           rows: mapped,
         };
-        const metadata = buildMetadata(resp.metadata);
-        if (metadata) result.metadata = metadata;
+        if (rows.length === 0) {
+          result.note = `No search data found for page ${page_url} in the last ${days} days.`;
+        }
+        applyAnalyticsExtras(result, resp);
         return jsonResult(result);
       } catch (e) {
         return errorResult(errorText('retrieving page query data', e, site_url));
