@@ -6,12 +6,12 @@ import { checkDiscoveryDrift, formatDriftReport, toWireEnum, type DiscoveryDocum
 /** Trimmed copy of the relevant part of the v1 discovery document. */
 function doc(): DiscoveryDocument {
   return {
-    revision: '20261020',
+    revision: '20261118',
     schemas: {
       SearchAnalyticsQueryRequest: {
         properties: {
-          type: { enum: ['WEB', 'IMAGE', 'VIDEO', 'NEWS', 'DISCOVER', 'GOOGLE_NEWS'] },
-          dimensions: { items: { enum: ['DATE', 'QUERY', 'PAGE', 'COUNTRY', 'DEVICE', 'SEARCH_APPEARANCE', 'HOUR'] } },
+          type: { enum: ['WEB', 'IMAGE', 'VIDEO', 'NEWS', 'DISCOVER', 'GOOGLE_NEWS', 'WEB_MULTIMODAL'] },
+          dimensions: { items: { enum: ['DATE', 'QUERY', 'PAGE', 'COUNTRY', 'DEVICE', 'SEARCH_APPEARANCE', 'HOUR', 'BRANDED_CLASSIFICATION'] } },
           dataState: { enum: ['DATA_STATE_UNSPECIFIED', 'FINAL', 'ALL', 'HOURLY_ALL'] },
           aggregationType: { enum: ['AUTO', 'BY_PROPERTY', 'BY_PAGE', 'BY_NEWS_SHOWCASE_PANEL'] },
         },
@@ -19,7 +19,7 @@ function doc(): DiscoveryDocument {
       ApiDimensionFilter: {
         properties: {
           operator: { enum: ['EQUALS', 'NOT_EQUALS', 'CONTAINS', 'NOT_CONTAINS', 'INCLUDING_REGEX', 'EXCLUDING_REGEX'] },
-          dimension: { enum: ['QUERY', 'PAGE', 'COUNTRY', 'DEVICE', 'SEARCH_APPEARANCE'] },
+          dimension: { enum: ['QUERY', 'PAGE', 'COUNTRY', 'DEVICE', 'SEARCH_APPEARANCE', 'BRANDED_CLASSIFICATION'] },
         },
       },
     },
@@ -31,12 +31,14 @@ test('toWireEnum maps camelCase to the API form', () => {
   assert.equal(toWireEnum('byNewsShowcasePanel'), 'BY_NEWS_SHOWCASE_PANEL');
   assert.equal(toWireEnum('hourlyAll'), 'HOURLY_ALL');
   assert.equal(toWireEnum('web'), 'WEB');
+  assert.equal(toWireEnum('webMultimodal'), 'WEB_MULTIMODAL');
+  assert.equal(toWireEnum('brandedClassification'), 'BRANDED_CLASSIFICATION');
 });
 
 test('matching document reports no drift', () => {
   const report = checkDiscoveryDrift(doc());
   assert.equal(report.hasDrift, false, formatDriftReport(report));
-  assert.equal(report.revision, '20261020');
+  assert.equal(report.revision, '20261118');
 });
 
 test('a new API value and a removed one are both reported', () => {
@@ -48,8 +50,8 @@ test('a new API value and a removed one are both reported', () => {
   assert.equal(report.hasDrift, true);
   const dims = report.results.find((r) => r.label === 'DIMENSIONS')!;
   assert.deepEqual(dims.missingLocally, ['NEW_DIMENSION']);
-  assert.deepEqual(dims.unknownRemotely, ['HOUR']);
-  assert.match(formatDriftReport(report), /DRIFT DIMENSIONS: new in API: NEW_DIMENSION; gone from API: HOUR/);
+  assert.deepEqual(dims.unknownRemotely, ['HOUR', 'BRANDED_CLASSIFICATION']);
+  assert.match(formatDriftReport(report), /DRIFT DIMENSIONS: new in API: NEW_DIMENSION; gone from API: HOUR, BRANDED_CLASSIFICATION/);
 });
 
 test('a field missing from the document counts as drift', () => {

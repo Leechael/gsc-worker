@@ -256,7 +256,9 @@ All 21 tools are always registered. Tools above the current tier return upgrade 
 | write | `TOOL_TIER=write` | `submit_sitemap`, `manage_sitemaps` (`submit`) |
 | destructive | `TOOL_TIER=destructive` | `add_site`, `delete_site`, `delete_sitemap`, `manage_sitemaps` (`delete`) |
 
-Start with `get_capabilities`: it reports the tier, auth status, token source, the AI Overviews / AI Mode boundary (that data is not exposed by the Search Console API), and the Google Analytics API vs UI boundary.
+Start with `get_capabilities`: it reports the tier, auth status, token source, the AI Overviews / AI Mode boundary (those have no independent Search Console API fields), and the Google Analytics API vs UI boundary.
+
+Search Analytics tools (`get_search_analytics`, `get_advanced_search_analytics`, `get_performance_overview`, `compare_search_periods`) accept `search_type`, including `webMultimodal` (Google Lens, Circle to Search, image uploads). That type cannot group or filter by `query`. `brandedClassification` groups or equals-filters `BRANDED` / `NON_BRANDED` and cannot share a request with a `query` filter; empty branded rows do not mean zero traffic. `get_advanced_search_analytics` also accepts `filter_lists` for exact country or device values (up to 1000 per list). `get_search_by_page_query` stays query-by-page on the web type.
 
 ## Google Analytics 4
 
