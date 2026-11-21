@@ -238,6 +238,10 @@ test('advanced tool descriptions document row limits, has_more, RE2, and express
   };
   assert.match(json.properties.dimensions?.description ?? '', /searchAppearance/);
   assert.match(json.properties.dimensions?.description ?? '', /hour/);
+  assert.match(json.properties.dimensions?.description ?? '', /brandedClassification/);
+  assert.match(json.properties.search_type?.description ?? '', /webMultimodal/);
+  assert.match(json.properties.filter_lists?.description ?? '', /1000/);
+  assert.match(json.properties.filter_lists?.description ?? '', /country, device/);
   assert.match(json.properties.filter_operator?.description ?? '', /includingRegex/);
   assert.match(json.properties.filter_operator?.description ?? '', /RE2/);
   assert.match(json.properties.filter_operator?.description ?? '', /4096/);

@@ -1,8 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
-import { DIMENSIONS, type Dimension } from '../lib/enums.js';
 import { lastNDays } from '../lib/dates.js';
+import {
+  BRANDED_EMPTY_NOTE,
+  crossFieldError,
+  parseDimensionList,
+  resolveSearchType,
+  usesBrandedClassification,
+} from '../lib/search-analytics-constraints.js';
 import { errorText, errorResult, jsonError, jsonResult } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
@@ -60,7 +66,8 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
       title: 'Search analytics',
       description:
         'Get search analytics data (clicks, impressions, CTR, position) for a specific property. ' +
-        'Dates are computed in Pacific Time. Do NOT use position/searchAppearance to infer AI Overview exposure — that data is UI-only (see get_capabilities).',
+        'Dates are computed in Pacific Time. search_type webMultimodal is Lens / Circle to Search / image uploads, not AI Overview or AI Mode. ' +
+        'Do NOT use position/searchAppearance to infer AI Overview exposure — that data is UI-only (see get_capabilities).',
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
@@ -68,29 +75,24 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
         days: z.number().int().min(1).max(5000).default(28)
           .describe('Number of days to look back (default 28, covering exactly 28 days inclusive).'),
         dimensions: z.string().default('query').describe(
-          'Dimensions to group by, comma-separated: query, page, device, country, date, searchAppearance ' +
-          '(hour is only supported by get_advanced_search_analytics with data_state="hourly_all").',
+          'Dimensions to group by, comma-separated: query, page, device, country, date, searchAppearance, brandedClassification ' +
+          '(hour is only supported by get_advanced_search_analytics with data_state="hourly_all"). ' +
+          'webMultimodal cannot group by query. brandedClassification cannot be combined with a query filter.',
+        ),
+        search_type: z.string().default('web').describe(
+          'Search type: web, image, video, news, discover, googleNews, or webMultimodal (case-insensitive, default web). ' +
+          'webMultimodal is Google Lens, Circle to Search on Android, and image uploads; it cannot group or filter by query.',
         ),
         row_limit: z.number().int().min(1).max(ROW_LIMIT_MAX).default(20).describe(
           `Number of rows to return (default 20, max ${ROW_LIMIT_MAX} in this tool).`,
         ),
       }),
     },
-    async ({ site_url, days, dimensions, row_limit }) => {
+    async ({ site_url, days, dimensions, search_type = 'web', row_limit }) => {
       try {
-        const dimensionList = dimensions
-          .split(',')
-          .map((d) => d.trim())
-          .filter(Boolean) as Dimension[];
-        const invalid = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
-        if (invalid.length > 0) {
-          return jsonError({
-            error: `Invalid dimensions: ${invalid.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}`,
-          });
-        }
-        if (dimensionList.length === 0) {
-          return jsonError({ error: 'At least one dimension is required.' });
-        }
+        const parsedDims = parseDimensionList(dimensions);
+        if (!parsedDims.ok) return jsonError({ error: parsedDims.error });
+        const dimensionList = parsedDims.dimensions;
         // The hour dimension requires dataState=hourly_all and a ≤10-day range;
         // this tool only sends all/final, so reject it here instead of letting
         // an invalid request reach the API (review P2-5).
@@ -100,6 +102,15 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
               'data_state="hourly_all" and a date range of at most 10 days.',
           });
         }
+
+        const parsedType = resolveSearchType(search_type);
+        if (!parsedType.ok) return jsonError({ error: parsedType.error });
+        const combo = crossFieldError({
+          searchType: parsedType.type,
+          dimensions: dimensionList,
+          filters: [],
+        });
+        if (combo) return jsonError({ error: combo });
 
         const { start, end } = lastNDays(days);
 
@@ -111,6 +122,7 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
               startDate: start,
               endDate: end,
               dimensions: dimensionList,
+              type: parsedType.type,
               rowLimit: Math.min(Math.max(1, row_limit), ROW_LIMIT_MAX),
               dataState: svc.config.dataState === 'all' ? 'all' : 'final',
             },
@@ -120,20 +132,24 @@ export function registerAnalyticsTools(server: McpServer, svc: ServerServices): 
         const rows = data.rows ?? [];
         const extras = analyticsExtras(data);
         if (rows.length === 0) {
+          const notes = [`No search analytics data found for ${site_url} in the selected period.`];
+          if (usesBrandedClassification(dimensionList, [])) notes.push(BRANDED_EMPTY_NOTE);
           return jsonResult({
             site_url,
             date_range: { start, end, days },
+            search_type: parsedType.type,
             dimensions: dimensionList,
             row_count: 0,
             rows: [],
             ...extras,
-            note: `No search analytics data found for ${site_url} in the selected period.`,
+            note: notes.join(' '),
           });
         }
 
         return jsonResult({
           site_url,
           date_range: { start, end, days },
+          search_type: parsedType.type,
           dimensions: dimensionList,
           ...extras,
           row_count: rows.length,

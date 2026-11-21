@@ -2,15 +2,26 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ServerServices } from '../mcp/context.js';
 import {
-  DIMENSIONS,
   FILTER_DIMENSIONS,
+  FILTER_LIST_DIMENSIONS,
+  FILTER_LIST_MAX_EXPRESSIONS,
   FILTER_OPERATORS,
-  SEARCH_TYPES,
   dataStateToWire,
   type DataStateParam,
-  type Dimension,
 } from '../lib/enums.js';
 import { isValidISODate, lastNDays } from '../lib/dates.js';
+import {
+  BRANDED_EMPTY_NOTE,
+  crossFieldError,
+  dimensionFilterGroupsPayload,
+  parseDimensionList,
+  parseFilterLists,
+  resolveSearchType,
+  usesBrandedClassification,
+  validateOrdinaryFilter,
+  type DimensionFilter,
+  type FilterList,
+} from '../lib/search-analytics-constraints.js';
 import { errorText, errorResult, jsonError, jsonResult } from './helpers.js';
 import { toolAnnotations } from '../mcp/tool-annotations.js';
 import { GSC_TOOLS } from './tool-tiers.js';
@@ -58,11 +69,7 @@ interface SearchAnalyticsResponse {
   responseAggregationType?: string;
 }
 
-interface ActiveFilter {
-  dimension: string;
-  operator: string;
-  expression: string;
-}
+type ActiveFilter = DimensionFilter;
 
 /** Shared row mapping: keys → dimension fields + rounded metrics (matches analytics.ts). */
 function mapRows(rows: SearchAnalyticsRow[], dimensionList: readonly string[]): Record<string, unknown>[] {
@@ -124,19 +131,12 @@ function validateFilterList(list: unknown): { ok: true; filters: ActiveFilter[] 
       };
     }
     const { dimension, operator, expression } = f as Record<string, unknown>;
-    if (typeof dimension !== 'string' || !(FILTER_DIMENSIONS as readonly string[]).includes(dimension)) {
-      return { ok: false, error: `Invalid filter dimension '${String(dimension)}'. Allowed: ${FILTER_DIMENSIONS.join(', ')}` };
-    }
-    if (typeof operator !== 'string' || !(FILTER_OPERATORS as readonly string[]).includes(operator)) {
-      return { ok: false, error: `Invalid filter operator '${String(operator)}'. Allowed: ${FILTER_OPERATORS.join(', ')}` };
-    }
-    if (typeof expression !== 'string') {
-      return { ok: false, error: 'Filter expression must be a string.' };
-    }
-    if (expression.length > FILTER_EXPRESSION_MAX) {
+    const validated = validateOrdinaryFilter(dimension, operator, expression);
+    if (!validated.ok) return { ok: false, error: validated.error };
+    if (validated.filter.expression.length > FILTER_EXPRESSION_MAX) {
       return { ok: false, error: `Filter expression exceeds the maximum length of ${FILTER_EXPRESSION_MAX} characters.` };
     }
-    out.push({ dimension, operator, expression });
+    out.push(validated.filter);
   }
   return { ok: true, filters: out };
 }
@@ -182,17 +182,23 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
       title: 'Performance overview',
       description:
         'Get a performance overview for a specific property: total clicks/impressions/CTR/position ' +
-        'plus a daily trend. Dates are computed in Pacific Time.',
+        'plus a daily trend. Dates are computed in Pacific Time. Optional search_type includes webMultimodal ' +
+        '(Lens / Circle to Search / image uploads), which is not AI Overview or AI Mode.',
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
         ),
         days: z.number().int().min(1).max(5000).default(28)
           .describe('Number of days to look back (default 28, covering exactly 28 days inclusive).'),
+        search_type: z.string().default('web').describe(
+          'Search type: web, image, video, news, discover, googleNews, or webMultimodal (case-insensitive, default web).',
+        ),
       }),
     },
-    async ({ site_url, days }) => {
+    async ({ site_url, days, search_type = 'web' }) => {
       try {
+        const parsedType = resolveSearchType(search_type);
+        if (!parsedType.ok) return jsonError({ error: parsedType.error });
         const { start, end } = lastNDays(days);
         const dataState = dataStateToWire(svc.config.dataState);
 
@@ -200,6 +206,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           startDate: start,
           endDate: end,
           dimensions: [],
+          type: parsedType.type,
           rowLimit: 1,
           dataState,
         });
@@ -208,6 +215,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           startDate: start,
           endDate: end,
           dimensions: ['date'],
+          type: parsedType.type,
           rowLimit: days,
           dataState,
         });
@@ -225,6 +233,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const result: Record<string, unknown> = {
           site_url,
           date_range: { start, end, days },
+          search_type: parsedType.type,
           totals: totalsRow
             ? {
                 clicks: totalsRow.clicks ?? 0,
@@ -258,7 +267,10 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         `Use max_rows to collect more across pages (default: same as row_limit; max 100000). ` +
         'pagination.has_more is true when the last fetched page was full, meaning more rows may exist — it is not a guarantee. ' +
         'When grouping by the "hour" dimension, pass data_state="hourly_all" and keep the date range within 10 days. ' +
-        `Filter operators include includingRegex and excludingRegex (RE2); each filter expression is at most ${FILTER_EXPRESSION_MAX} characters.`,
+        `Filter operators include includingRegex and excludingRegex (RE2); each filter expression is at most ${FILTER_EXPRESSION_MAX} characters. ` +
+        'search_type webMultimodal is Google Lens, Circle to Search on Android, and image uploads — not AI Overview or AI Mode — and cannot group or filter by query. ' +
+        'brandedClassification groups or filters BRANDED vs NON_BRANDED (equals only); it cannot be combined with a query filter, data starts 2026-02-21, and empty rows do not mean zero traffic. ' +
+        `filter_lists matches country or device against up to ${FILTER_LIST_MAX_EXPRESSIONS} exact values (implicit OR); that dimension cannot also appear in filters.`,
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
@@ -270,11 +282,13 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           .describe('End date in YYYY-MM-DD format (defaults to today, Pacific Time).'),
         dimensions: nullMeansDefault(z.string(), 'query')
           .describe(
-            'Dimensions to group by, comma-separated: date, query, page, country, device, searchAppearance, hour. ' +
-              'hour requires data_state="hourly_all" and a date range of at most 10 days.',
+            'Dimensions to group by, comma-separated: date, query, page, country, device, searchAppearance, hour, brandedClassification. ' +
+              'hour requires data_state="hourly_all" and a date range of at most 10 days. ' +
+              'webMultimodal cannot group by query. brandedClassification cannot be combined with a query filter.',
           ),
         search_type: nullMeansDefault(z.string(), 'web').describe(
-          'Type of search results: web, image, video, news, discover, or googleNews (case-insensitive, default web).',
+          'Type of search results: web, image, video, news, discover, googleNews, or webMultimodal (case-insensitive, default web). ' +
+            'webMultimodal is Lens, Circle to Search, and image uploads; it cannot group or filter by query.',
         ),
         row_limit: nullMeansDefault(z.number().int().min(1).max(API_PAGE_MAX), 1000).describe(
           `Rows per API page (default 1000, max ${API_PAGE_MAX} per request).`,
@@ -307,7 +321,14 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           'JSON array of filter objects with dimension/operator/expression keys, ANDed together. ' +
           `Operators: ${FILTER_OPERATORS.join(', ')}. Regex operators use RE2. ` +
           `Each expression is at most ${FILTER_EXPRESSION_MAX} characters. ` +
+          'brandedClassification supports equals only (BRANDED or NON_BRANDED) and cannot share a request with a query filter. ' +
           'Overrides filter_dimension/filter_operator/filter_expression when provided.',
+        ),
+        filter_lists: z.string().nullish().describe(
+          'JSON array of multi-value filters: [{dimension, expressions}]. ' +
+          `Dimensions: ${FILTER_LIST_DIMENSIONS.join(', ')}. Each expressions array is an implicit OR of exact equals, ` +
+          `at most ${FILTER_LIST_MAX_EXPRESSIONS} strings, and is sent as dimensionFilterGroups.filterLists. ` +
+          'A dimension cannot appear in both filters and filter_lists in the same request. Empty or omitted means no lists.',
         ),
         data_state: z.string().nullish().describe(
           'Data freshness: "all" (default, matches GSC dashboard), "final" (confirmed data only, 2-3 day lag), ' +
@@ -320,7 +341,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
       start_date,
       end_date,
       dimensions,
-      search_type,
+      search_type = 'web',
       row_limit,
       max_rows,
       start_row,
@@ -330,6 +351,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
       filter_operator,
       filter_expression,
       filters,
+      filter_lists,
       data_state,
     }) => {
       try {
@@ -345,24 +367,17 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         }
 
         // Dimensions
-        const dimensionList = dimensions.split(',').map((d) => d.trim()).filter(Boolean) as Dimension[];
-        const invalidDims = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
-        if (invalidDims.length > 0) {
-          return jsonError({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
-        }
-        if (dimensionList.length === 0) {
-          return jsonError({ error: 'At least one dimension is required.' });
-        }
+        const parsedDims = parseDimensionList(dimensions);
+        if (!parsedDims.ok) return jsonError({ error: parsedDims.error });
+        const dimensionList = parsedDims.dimensions;
 
         // search_type (compat param name) → wire field `type`. Match
         // case-insensitively but map back to the canonical wire value
         // (`googleNews` is camelCase — sending `googlenews` would be
         // rejected by the API; review P2-4).
-        const loweredType = search_type.toLowerCase().trim();
-        const resolvedType = SEARCH_TYPES.find((t) => t.toLowerCase() === loweredType);
-        if (resolvedType === undefined) {
-          return jsonError({ error: `Invalid search_type '${search_type}'. Allowed: ${SEARCH_TYPES.join(', ')}` });
-        }
+        const parsedType = resolveSearchType(search_type);
+        if (!parsedType.ok) return jsonError({ error: parsedType.error });
+        const resolvedType = parsedType.type;
 
         // data_state: per-call override (all/final/hourly_all) or fall back to the global setting.
         const resolvedDataState = (data_state ?? svc.config.dataState).toLowerCase().trim();
@@ -396,7 +411,6 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
 
         // Filters: multi-filter JSON array takes priority over the single-filter triple.
         let activeFilters: ActiveFilter[] = [];
-        let filterGroups: { groupType: string; filters: ActiveFilter[] }[] | undefined;
         // null means omitted; only a non-empty string is a filter.
         if (filters != null && filters.trim() !== '') {
           let parsed: unknown;
@@ -408,7 +422,6 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           const validated = validateFilterList(parsed);
           if (!validated.ok) return jsonError({ error: validated.error });
           activeFilters = validated.filters;
-          filterGroups = [{ groupType: 'AND', filters: activeFilters }];
         } else if (filter_dimension != null || filter_expression != null) {
           if (filter_dimension == null || filter_expression == null) {
             return jsonError({ error: 'filter_dimension and filter_expression must be provided together.' });
@@ -420,8 +433,30 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           }]);
           if (!validated.ok) return jsonError({ error: validated.error });
           activeFilters = validated.filters;
-          filterGroups = [{ groupType: 'AND', filters: activeFilters }];
         }
+
+        let activeFilterLists: FilterList[] = [];
+        if (filter_lists != null && filter_lists.trim() !== '') {
+          let parsedLists: unknown;
+          try {
+            parsedLists = JSON.parse(filter_lists);
+          } catch {
+            return jsonError({ error: 'Invalid filter_lists JSON. Please provide a valid JSON array of {dimension, expressions} objects.' });
+          }
+          const validatedLists = parseFilterLists(parsedLists);
+          if (!validatedLists.ok) return jsonError({ error: validatedLists.error });
+          activeFilterLists = validatedLists.lists;
+        }
+
+        const combo = crossFieldError({
+          searchType: resolvedType,
+          dimensions: dimensionList,
+          filters: activeFilters,
+          filterLists: activeFilterLists,
+        });
+        if (combo) return jsonError({ error: combo });
+
+        const filterGroups = dimensionFilterGroupsPayload(activeFilters, activeFilterLists);
 
         const baseBody: Record<string, unknown> = {
           startDate: start,
@@ -464,15 +499,18 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const hasMore = lastPageFull;
 
         if (collected.length === 0) {
+          const notes = [`No search analytics data found for ${site_url} with the specified parameters.`];
+          if (usesBrandedClassification(dimensionList, activeFilters)) notes.push(BRANDED_EMPTY_NOTE);
           const noData: Record<string, unknown> = {
             site_url,
             date_range: { start, end },
             search_type: resolvedType,
             dimensions: dimensionList,
             filters_applied: activeFilters,
+            filter_lists_applied: activeFilterLists,
             row_count: 0,
             rows: [],
-            note: `No search analytics data found for ${site_url} with the specified parameters.`,
+            note: notes.join(' '),
           };
           const sortNote = sortLimitationNote(sort_by, sort_direction);
           if (sortNote) noData.sort_note = sortNote;
@@ -489,6 +527,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           search_type: resolvedType,
           dimensions: dimensionList,
           filters_applied: activeFilters,
+          filter_lists_applied: activeFilterLists,
           pagination: {
             start_row: start_row,
             row_count: mapped.length,
@@ -519,7 +558,8 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         'Compare search analytics data between two time periods. Period 1 is the analyzed period and ' +
         'Period 2 is the baseline; deltas are Period 1 relative to Period 2, percentages use Period 2 as ' +
         'the baseline (null when the baseline is zero). For a current-vs-previous comparison, pass the ' +
-        'current period as Period 1 and the previous period as Period 2.',
+        'current period as Period 1 and the previous period as Period 2. ' +
+        'search_type webMultimodal cannot group by query; brandedClassification cannot be combined with a query filter.',
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',
@@ -528,11 +568,17 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         period1_end: z.string().describe('End date for period 1 / the analyzed period (YYYY-MM-DD).'),
         period2_start: z.string().describe('Start date for period 2 / the baseline period (YYYY-MM-DD).'),
         period2_end: z.string().describe('End date for period 2 / the baseline period (YYYY-MM-DD).'),
-        dimensions: z.string().default('query').describe('Dimensions to group by, comma-separated (default: query).'),
+        dimensions: z.string().default('query').describe(
+          'Dimensions to group by, comma-separated (default: query). Includes brandedClassification. ' +
+          'webMultimodal cannot group by query.',
+        ),
+        search_type: z.string().default('web').describe(
+          'Search type: web, image, video, news, discover, googleNews, or webMultimodal (case-insensitive, default web).',
+        ),
         limit: z.number().int().min(1).max(1000).default(10).describe('Number of top results to compare (default 10).'),
       }),
     },
-    async ({ site_url, period1_start, period1_end, period2_start, period2_end, dimensions, limit }) => {
+    async ({ site_url, period1_start, period1_end, period2_start, period2_end, dimensions, search_type = 'web', limit }) => {
       try {
         for (const [label, d] of [
           ['period1_start', period1_start],
@@ -548,14 +594,9 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           return jsonError({ error: 'Invalid period range: start date is after end date.' });
         }
 
-        const dimensionList = dimensions.split(',').map((d) => d.trim()).filter(Boolean) as Dimension[];
-        const invalidDims = dimensionList.filter((d) => !(DIMENSIONS as readonly string[]).includes(d));
-        if (invalidDims.length > 0) {
-          return jsonError({ error: `Invalid dimensions: ${invalidDims.join(', ')}. Allowed: ${DIMENSIONS.join(', ')}` });
-        }
-        if (dimensionList.length === 0) {
-          return jsonError({ error: 'At least one dimension is required.' });
-        }
+        const parsedDims = parseDimensionList(dimensions);
+        if (!parsedDims.ok) return jsonError({ error: parsedDims.error });
+        const dimensionList = parsedDims.dimensions;
         // This tool only queries with the global all/final dataState; the hour
         // dimension would be an invalid request (review P2-5).
         if (dimensionList.includes('hour')) {
@@ -564,6 +605,14 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
               'data_state="hourly_all" and a date range of at most 10 days.',
           });
         }
+        const parsedType = resolveSearchType(search_type);
+        if (!parsedType.ok) return jsonError({ error: parsedType.error });
+        const combo = crossFieldError({
+          searchType: parsedType.type,
+          dimensions: dimensionList,
+          filters: [],
+        });
+        if (combo) return jsonError({ error: combo });
 
         const dataState = dataStateToWire(svc.config.dataState);
         const [period1Resp, period2Resp] = await Promise.all([
@@ -571,6 +620,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
             startDate: period1_start,
             endDate: period1_end,
             dimensions: dimensionList,
+            type: parsedType.type,
             rowLimit: 1000, // fetch generously so items can be matched across periods
             dataState,
           }),
@@ -578,6 +628,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
             startDate: period2_start,
             endDate: period2_end,
             dimensions: dimensionList,
+            type: parsedType.type,
             rowLimit: 1000,
             dataState,
           }),
@@ -586,15 +637,18 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
         const period1Rows = period1Resp.rows ?? [];
         const period2Rows = period2Resp.rows ?? [];
         if (period1Rows.length === 0 && period2Rows.length === 0) {
+          const notes = [`No data found for either period for ${site_url}.`];
+          if (usesBrandedClassification(dimensionList, [])) notes.push(BRANDED_EMPTY_NOTE);
           const empty: Record<string, unknown> = {
             site_url,
             period1: { start: period1_start, end: period1_end },
             period2: { start: period2_start, end: period2_end },
+            search_type: parsedType.type,
             dimensions: dimensionList,
             total_items: 0,
             showing: 0,
             comparison: [],
-            note: `No data found for either period for ${site_url}.`,
+            note: notes.join(' '),
           };
           applyAnalyticsExtras(empty, period1Resp, {
             metadata: 'metadata_period1',
@@ -670,6 +724,7 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
           site_url,
           period1: { start: period1_start, end: period1_end },
           period2: { start: period2_start, end: period2_end },
+          search_type: parsedType.type,
           dimensions: dimensionList,
           total_items: comparison.length,
           showing: serialisable.length,
@@ -698,7 +753,8 @@ export function registerAdvancedAnalyticsTools(server: McpServer, svc: ServerSer
       title: 'Search queries for a page',
       description:
         'Get search analytics data for a specific page, broken down by query. ' +
-        'Dates are computed in Pacific Time.',
+        'Dates are computed in Pacific Time. This tool always uses the web search type and the query ' +
+        'dimension, so it cannot return webMultimodal (Lens / Circle to Search / image-upload) rows.',
       inputSchema: z.object({
         site_url: z.string().describe(
           'Exact GSC property URL from list_properties (e.g. "https://example.com/" or "sc-domain:example.com").',

@@ -79,7 +79,7 @@ function schemaAllowsNull(prop: { type?: string | string[]; anyOf?: { type?: str
 
 const NULLABLE_FIELDS: Record<string, string[]> = {
   get_advanced_search_analytics: [
-    'start_date', 'end_date', 'max_rows', 'filter_dimension', 'filter_expression', 'filters', 'data_state',
+    'start_date', 'end_date', 'max_rows', 'filter_dimension', 'filter_expression', 'filters', 'filter_lists', 'data_state',
     'dimensions', 'search_type', 'row_limit', 'start_row', 'sort_by', 'sort_direction', 'filter_operator',
   ],
   list_sitemaps_enhanced: ['sitemap_index'],

@@ -10,9 +10,11 @@ import { GSC_TOOLS } from './tool-tiers.js';
 
 const AEO_GEO_BOUNDARY = `
 AEO/GEO CAPABILITY BOUNDARY:
-- AI Overviews / AI Mode / multimodal performance data is available ONLY in the
-  GSC web UI (Generative AI performance report) or via export. This MCP cannot
-  access it — the Search Console API exposes no generative/AI fields.
+- AI Overviews / AI Mode performance is available ONLY in the GSC web UI
+  (Generative AI performance report) or via export. The Search Console API
+  has no independent AI Overview or AI Mode fields; they cannot be isolated.
+- search_type=webMultimodal is Google Lens, Circle to Search on Android, and
+  image uploads in Google Search. It is not AI Overview or AI Mode.
 - Do NOT infer AI exposure from searchAppearance or position values.
 `.trim();
 
